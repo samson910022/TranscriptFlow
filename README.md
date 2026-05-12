@@ -4,6 +4,18 @@ Resilient AI data pipeline for turning raw transcripts into searchable, summariz
 
 TranscriptFlow converts YouTube/SRT subtitle files into semantic chunks, LLM-generated summaries and tags, batched embeddings, and LanceDB vector indexes. It is designed for long transcripts and batch jobs where observability, retries, and recoverability matter.
 
+## Project Origin
+
+TranscriptFlow started from a very practical preservation problem.
+
+A psychology channel I followed for years announced that it would stop updating and planned to take down its video archive about a year later. The channel had published roughly one video per day for more than three years, leaving behind a large body of long-form material. The content was valuable, but difficult to search: titles were often only loosely related to the actual discussion, and YouTube search was not enough when I wanted to find a specific idea, example, guest, or topic buried somewhere inside hundreds of videos.
+
+Around the same time, I started experimenting with OpenClaw and learned more about LanceDB, embeddings, and vector retrieval. That gave me the idea to turn subtitle files into a searchable knowledge base. The project grew through many rounds of AI-assisted exploration, debugging, failed attempts, and redesign.
+
+One early approach was to ask an LLM to segment transcripts directly. In practice, this was too unstable for the models and workloads I had available: hallucinated boundaries and impossible timestamps appeared, including cases where a transcript only lasted tens of minutes but the generated timeline contained values such as `1:20:xx`. That failure shaped the current design. TranscriptFlow avoids relying on LLMs for structural time boundaries and instead uses a more deterministic, embedding-assisted chunking pipeline with validation, retries, and auditability.
+
+The result is not just a summarizer. It is a resilient transcript-to-vector-database pipeline for turning large subtitle archives into RAG-ready knowledge.
+
 ## Engineering Highlights
 
 TranscriptFlow is built to demonstrate production-oriented AI pipeline design rather than a single prompt wrapper:
@@ -17,13 +29,35 @@ TranscriptFlow is built to demonstrate production-oriented AI pipeline design ra
 
 ## Why It Exists
 
-Most transcript tools stop at "summarize this file." TranscriptFlow treats transcripts as a data pipeline problem:
+Most transcript tools stop at "summarize this file." TranscriptFlow treats transcripts as a data pipeline problem, especially when the source archive is large, messy, and not easily searchable by title or metadata:
 
 - preserve semantic boundaries instead of splitting by fixed length
 - process many files through a recoverable state machine
 - retry failed chunks without throwing away successful work
 - track model errors, elapsed time, progress, and batch health
 - produce RAG-ready records for semantic search and agent memory
+
+## What It Is
+
+TranscriptFlow provides a flexible, fault-tolerant path from subtitle files to a LanceDB vector database:
+
+```text
+SRT subtitles -> semantic chunks -> summaries/tags -> embeddings -> LanceDB
+```
+
+The input subtitles can come from Whisper, YouTube captions, or embedded subtitle exports. The output is structured data suitable for semantic search, retrieval-augmented generation, personal knowledge systems, research archives, or agent memory.
+
+It is useful when:
+
+- you have many long transcripts to process
+- the content is hard to search by title alone
+- the archive mixes different topics, speakers, or content styles
+- you need resumability because the full job may take hours or days
+- you want model failures to be visible instead of silently corrupting output
+
+## What It Is Not
+
+TranscriptFlow is not a one-click archival tool and does not download videos for you. It expects subtitle files and a manifest. It also does not assume that LLMs are reliable enough to own timestamp segmentation directly. LLMs are used where they are strongest: summarization, tagging, and metadata extraction after the transcript has already been split into validated chunks.
 
 ## Key Features
 
@@ -35,6 +69,28 @@ Most transcript tools stop at "summarize this file." TranscriptFlow treats trans
 - **Model diagnostics**: records success/failure counts, elapsed time, throughput, and common error patterns.
 - **Batch audit tooling**: checks structure, timeliness, data integrity, error visibility, model performance, and cross-file consistency.
 - **OpenAI-compatible API support**: works with OpenAI, LiteLLM Proxy, OpenRouter, vLLM, Ollama-compatible servers, or any service exposing compatible `/v1/chat/completions` and `/v1/embeddings` endpoints.
+
+## Tunable Parameters
+
+TranscriptFlow is designed to adapt to different transcript archives rather than assuming one perfect chunking strategy. The most important controls live in `scripts/config.example.json`:
+
+- `chunking.smart_merge_window_size`: number of subtitle entries considered in each merge window
+- `chunking.smart_merge_strong_pct`: percentile threshold for strong semantic boundaries
+- `chunking.smart_merge_weak_pct`: percentile threshold for weaker candidate boundaries
+- `chunking.smart_merge_min_sentences`: minimum span before a chunk boundary is accepted
+- `chunking.smart_merge_noise_drop_len`: short noisy segments to discard
+- `chunking.smart_merge_noise_weak_len`: short segments treated as weak boundary candidates
+- `chunking.min_chunks` / `chunking.max_chunks`: lower and upper bounds for chunk counts
+- `summarization.models`: ordered list of chat models used for summary/tag generation
+- `summarization.max_retries`: retry budget per chunk
+- `summarization.concurrency`: summarization worker concurrency
+- `embedding.model`: embedding model name
+- `embedding.expected_dim`: expected vector dimension for validation and LanceDB schema
+- `embedding.batch_max_size`: maximum embedding batch size
+- `phase_concurrency`: per-phase concurrency limits for the watchdog
+- `watchdog.max_working_time_sec`: timeout before a stuck job is reset
+
+These parameters make the pipeline suitable for archives with different rhythms: interviews, lectures, podcasts, panel discussions, course transcripts, or mixed long-form media.
 
 ## Architecture
 
@@ -63,7 +119,7 @@ auto_watchdog.py
 ## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/TranscriptFlow.git
+git clone https://github.com/samson1357924/TranscriptFlow.git
 cd TranscriptFlow
 
 python3 -m venv .venv
