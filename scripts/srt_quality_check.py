@@ -105,6 +105,13 @@ def call_llm_for_scoring(window_text: str, start_idx: int) -> dict:
             content = content.strip()
             m = re.search(r'\{.*\}', content, re.DOTALL)
             data = json.loads(m.group()) if m else json.loads(content)
+            # 驗證回傳格式
+            flagged = data.get('flagged_entries', {})
+            for key in flagged:
+                int(key)  # 非數字 key → raise ValueError
+            for dim in ['連貫性', '邏輯合理性', '語句品質', '時間合理性']:
+                if 'score' not in data.get('scores', {}).get(dim, {}):
+                    raise ValueError(f"missing score for {dim}")
             return data
         except Exception as e:
             logger.warning(f"LLM call attempt {attempt} failed: {e}")
@@ -171,7 +178,10 @@ def aggregate_flags(windows_results: list, window_size=10, stride=5):
         win_start = win_result['window_start']
         flagged = win_result.get('flagged_entries', {})
         for rel_idx_str, info in flagged.items():
-            rel_idx = int(rel_idx_str) - 1
+            try:
+                rel_idx = int(rel_idx_str) - 1
+            except ValueError:
+                continue
             abs_idx = win_start + rel_idx
             entry_flags[abs_idx].append(info)
 
