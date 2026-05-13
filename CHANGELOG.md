@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.2 (2026-05-13): LLM Quality Evaluation & SRT Checker
+
+### 🚀 New Features
+
+- **`scripts/srt_quality_check.py`** — SRT 字幕品質檢查。滑窗 10 句、重疊 5 句送 LLM 評分（連貫性 / 邏輯合理性 / 語句品質 / 時間合理性），跨窗彙整標記（≥2 窗 🔴 有問題 / 1 窗 🟡 存疑）。支援批次報告與互動修正模式（替換/編輯/保留）
+- **`scripts/evaluate_chunks.py` (B+ 方案)** — LLM 評估分段品質。掃描方案 A/B 的 JSON 輸出，對每個 chunk 評分：邊界合理性（內部連貫性 25 + 斷點合理與否 25）+ 雜訊處理 50 = 總分 100。自動跨 config 比較並推薦最佳參數
+- **`scripts/evaluate_summary_fidelity.py`** — 摘要忠實度獨立評估。對每個 chunk 的原文 + 摘要送 LLM 評分（事實正確性 / 完整性 / 中立性 / 整體品質），擷取幻覺內容與遺漏關鍵點，跨 model 統計
+- **`scripts/generate_manifest.py`** — 掃描 data_dir 自動產生 master_file_manifest.json
+
+### 📦 New Scripts (v1.2)
+
+- `srt_quality_check.py` — SRT 品質檢查
+- `evaluate_chunks.py` — B+ Chunk 品質評分
+- `evaluate_summary_fidelity.py` — 摘要忠實度評估
+- `generate_manifest.py` — 總表產生器
+
 ## v1.1 (2026-05-13): Test Pipeline & Boundary Diagnostics
 
 ### 🚀 New Features

@@ -204,6 +204,50 @@ SRT_MASTER_FILE=./examples/master_file_manifest.example.json
 
 Do not commit `.env`, `config.json`, `test_params_suite.json`, generated output, or LanceDB data.
 
+## SRT Quality Check
+
+Sliding-window LLM evaluation to find transcription errors or illogical segments:
+
+```bash
+python3 scripts/srt_quality_check.py --file-id 3
+python3 scripts/srt_quality_check.py --file-id 3 --interactive   # human-in-the-loop
+python3 scripts/srt_quality_check.py --input sample.srt --output report.txt
+```
+
+Windows of 10 entries with 5-entry overlap. Each entry flagged by ≥2 windows → 🔴 **problem**, 1 window → 🟡 **questionable**. Scores 4 dimensions (0-25 each): coherence, logic, wording quality, timestamp合理性.
+
+## B+ Chunk Quality Evaluation
+
+Evaluate chunk boundary and noise handling quality from test suite JSON outputs:
+
+```bash
+python3 scripts/evaluate_chunks.py --reports /path/to/output/*.json
+python3 scripts/evaluate_chunks.py --reports /path/to/dir --sample 10
+```
+
+Scores (total 100): boundary reasonableness (coherence 25 + breakpoint correctness 25) + noise handling 50. Outputs cross-config comparison with best-param recommendation.
+
+## Summary Fidelity Evaluation
+
+Assess whether LLM summaries faithfully reflect chunk content, independent of chunk quality:
+
+```bash
+python3 scripts/evaluate_summary_fidelity.py --reports /path/to/output/*.json
+python3 scripts/evaluate_summary_fidelity.py --reports /path/to/dir --sample 5
+```
+
+Scores (0-25 each): factual accuracy, completeness, neutrality, overall quality. Detects hallucinated content and missing key points per model.
+
+## Manifest Generator
+
+Scan the data directory and auto-generate `master_file_manifest.json`:
+
+```bash
+python3 scripts/generate_manifest.py                    # uses config.json paths
+python3 scripts/generate_manifest.py --dry-run           # preview only
+python3 scripts/generate_manifest.py --data-dir /path --output /path/manifest.json
+```
+
 ## State Machine
 
 ```text
