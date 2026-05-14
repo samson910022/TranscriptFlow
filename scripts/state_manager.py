@@ -5,6 +5,7 @@ from datetime import datetime
 import sys
 import re
 import fcntl
+import tempfile
 
 # 優先從環境變數讀取專案根目錄
 PROJECT_ROOT = os.environ.get('SRT_PROJECT_ROOT', os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
@@ -29,18 +30,20 @@ def _locked_read_write(operation_func):
     MAX_FALLBACK_ATTEMPTS = 10
     for attempt in range(MAX_FALLBACK_ATTEMPTS):
         try:
-            with open(path, 'r+') as f:
+            with open(path, 'r') as f:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 try:
-                    f.seek(0)
                     data = json.load(f)
                     new_data = operation_func(data)
-                    if new_data is not None:
-                        f.seek(0)
-                        json.dump(new_data, f, indent=2, ensure_ascii=False)
-                        f.truncate()
                 finally:
                     fcntl.flock(f, fcntl.LOCK_UN)
+            if new_data is not None:
+                dir_path = os.path.dirname(path) or '.'
+                with tempfile.NamedTemporaryFile(mode='w', dir=dir_path, delete=False,
+                                                 prefix='.status_tmp_', suffix='.json') as tf:
+                    tmp_path = tf.name
+                    json.dump(new_data, tf, indent=2, ensure_ascii=False)
+                os.replace(tmp_path, path)
             return
         except BlockingIOError:
             if attempt < MAX_FALLBACK_ATTEMPTS - 1:
@@ -65,12 +68,12 @@ def load_status(file_id=None):
 
 def save_status(data):
     path = get_status_path()
-    with open(path, 'w') as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+    dir_path = os.path.dirname(path) or '.'
+    with tempfile.NamedTemporaryFile(mode='w', dir=dir_path, delete=False,
+                                     prefix='.status_tmp_', suffix='.json') as tf:
+        tmp_path = tf.name
+        json.dump(data, tf, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, path)
 
 # ── 相位並發控制 ──────────────────────────────────────────────────────────
 _PHASE_SLOTS_FILE = None

@@ -1,5 +1,4 @@
-import urllib.request
-import urllib.error
+import requests
 #!/usr/bin/env python3
 """
 批次向量化模組 (Batch Embedding)
@@ -38,6 +37,7 @@ from circuit_breaker import (
 )
 
 logger = get_logger('batch_embedding')
+_session = requests.Session()
 
 
 @dataclass
@@ -119,17 +119,14 @@ class BatchEmbeddingClient:
 
         def _do_request():
             url = f"{self.api_base.rstrip('/')}{self.embeddings_path}"
-            payload = json.dumps({
-                "model": self.model,
-                "input": texts
-            }).encode('utf-8')
             headers = {
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {self.api_key}'
             }
-            req = urllib.request.Request(url, data=payload, headers=headers)
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                result = json.load(resp)
+            resp = _session.post(url, json={"model": self.model, "input": texts},
+                                 headers=headers, timeout=self.timeout)
+            resp.raise_for_status()
+            result = resp.json()
             embeddings = []
             for item in result.get('data', []):
                 vec = np.array(item['embedding'])

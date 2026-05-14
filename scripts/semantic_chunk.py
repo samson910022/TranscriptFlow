@@ -130,199 +130,191 @@ def generate_embedding(text: str, expected_dim: Optional[int] = None) -> Optiona
         logger.error(f"Embedding request failed for text snippet '{text[:30]}...': {e}")
         return None
 
-def smart_merge_3_0( entries: List[SubtitleEntry], file_id: int, window_size: int = SMART_MERGE_WINDOW_SIZE, min_sentences: int = SMART_MERGE_MIN_SENTENCES, high_pct: float = SMART_MERGE_WEAK_PCT, low_pct: float = SMART_MERGE_STRONG_PCT, noise_drop_len: int = SMART_MERGE_NOISE_DROP_LEN, noise_weak_len: int = SMART_MERGE_NOISE_WEAK_LEN ) -> tuple[List[Dict], List[int], List[Dict]]:
-    total_entries = len(entries)
-    if total_entries < window_size:
-        return [{
-            'start_idx': 0,
-            'end_idx': total_entries - 1,
-            'start_time': entries[0].start_time,
-            'end_time': entries[-1].end_time,
-            'text': ' '.join(e.text for e in entries)
-        }], [], []
-
-    # 1. 產生重疊窗口 (stride = 1)
-    windows = []
-    for i in range(total_entries - window_size + 1):
-        seg = entries[i : i + window_size]
-        windows.append(' '.join(e.text for e in seg))
-
-    # 2. 全面向量化 (Batch 處理)
+def _embed_windows(windows: List[str]) -> tuple[List, List[int]]:
+    """向量化所有窗口，回傳 (vectors, failed_indices)。"""
     _ensure_client()
     batch_size = get_env_or_config('BATCH_EMBEDDING_MAX_SIZE', 'embedding.batch_max_size', 32)
-    
     vectors = [None] * len(windows)
     failed_windows = []
-    
-    def process_batch(indices, current_batch_size):
+
+    def _process_batch(indices, current_batch_size):
         texts = [windows[i] for i in indices]
         try:
             res = _batch_embedding_client.generate_batch_embeddings(texts)
             if res.success and res.embeddings:
                 for i, vec in zip(indices, res.embeddings):
                     vectors[i] = vec
-                print(f"TRACE: assigned {len(res.embeddings)} vecs to indices {indices[0]}-{indices[-1]}")
                 return True
-            else:
-                raise ValueError(res.error or "Unknown error")
+            raise ValueError(res.error or "Unknown error")
         except Exception as e:
             if current_batch_size <= 1:
-                for i in indices:
-                    failed_windows.append(i)
+                failed_windows.extend(indices)
                 return False
-            # 指數回退拆分 (例如 32 -> 16+16)
             half = len(indices) // 2
-            logger.warning(f"Batch {len(indices)} 失敗 ({e})，拆分為 {half} + {len(indices)-half} 重試...")
-            return process_batch(indices[:half], current_batch_size // 2) and \
-                   process_batch(indices[half:], current_batch_size // 2)
+            logger.warning(f"Batch {len(indices)} failed ({e}), splitting into {half}+{len(indices)-half}")
+            return _process_batch(indices[:half], current_batch_size // 2) and \
+                   _process_batch(indices[half:], current_batch_size // 2)
 
     all_indices = list(range(len(windows)))
     for i in range(0, len(all_indices), batch_size):
-        chunk_indices = all_indices[i:i + batch_size]
-        process_batch(chunk_indices, batch_size)
+        _process_batch(all_indices[i:i + batch_size], batch_size)
+    return vectors, failed_windows
 
-    if len([v for v in vectors if v is not None]) < 2:
-        logger.error("有效向量過少，無法執行 Smart Merge")
-        return [], failed_windows, []
 
-    valid_vec_count = len([v for v in vectors if v is not None])
-    logger.info(f"📊 Embedding 向量化完成：有效向量 {valid_vec_count}/{len(windows)} 個")
-    if valid_vec_count < len(windows):
-        logger.warning(f"⚠️ {len(windows) - valid_vec_count} 個窗口向量化失敗")
-    # 3. 計算相似度前：報告實際向量化狀態
-    valid_vec_count = len([v for v in vectors if v is not None])
-    logger.info(f"📊 Embedding 完成：有效 {valid_vec_count}/{len(windows)} 個向量")
-    if valid_vec_count < 5:
-        logger.error(f"有效向量不足（{valid_vec_count}），無法執行 Smart Merge")
-        return [], failed_windows, []
-    
-    # 3. 計算「無重疊、但相鄰」的 Cosine 相似度
-    sims = []
-    sim_to_break_idx = []
+def _compute_similarities(vectors: List, window_size: int) -> tuple[List[float], List[int]]:
+    """計算相鄰非重疊視窗的 cosine similarity，回傳 (sims, sim_to_break_idx)。"""
+    sims, sim_to_break_idx = [], []
     for i in range(len(vectors) - window_size):
-        v1 = vectors[i]
-        v2 = vectors[i + window_size]
+        v1, v2 = vectors[i], vectors[i + window_size]
         if v1 is not None and v2 is not None:
             sim = cosine_similarity([v1], [v2])[0][0]
-            sims.append(sim)
-            sim_to_break_idx.append(i + window_size)
         else:
-            sims.append(1.0)
-            sim_to_break_idx.append(i + window_size)
+            sim = 1.0
+        sims.append(sim)
+        sim_to_break_idx.append(i + window_size)
+    return sims, sim_to_break_idx
 
-    if not sims:
-        return [{
-            'start_idx': 0,
-            'end_idx': total_entries - 1,
-            'start_time': entries[0].start_time,
-            'end_time': entries[-1].end_time,
-            'text': ' '.join(e.text for e in entries)
-        }], failed_windows, []
 
-    # 4. 斷點強度排序
+def _resolve_breakpoints(sims: List[float], sorted_idx: List[int],
+                          sim_to_break_idx: List[int], total_entries: int,
+                          high_pct: float, low_pct: float,
+                          min_sentences: int) -> tuple[List[int], float]:
+    """從相似度決定最終斷點位置，回傳 (active_breaks, low_pct_strength_threshold)。"""
     n_sims = len(sims)
     strengths = [1.0 - s for s in sims]
-    sorted_idx = sorted(range(n_sims), key=lambda x: strengths[x], reverse=True)
-    high_cut = max(1, int(n_sims * high_pct)) # 前 5% (弱斷點)
-    low_cut = max(1, int(n_sims * low_pct)) # 前 2% (強斷點)
-    low_pct_strength_threshold = strengths[sorted_idx[min(low_cut, n_sims-1)]]
+    low_cut = max(1, int(n_sims * low_pct))
+    high_cut = max(1, int(n_sims * high_pct))
+    threshold = strengths[sorted_idx[min(low_cut, n_sims - 1)]]
 
-    # 前 2% 直接套用（絕對斷點）
-    absolute_breaks = set(sorted_idx[:low_cut])
-    # 5% ~ 2% 為待定斷點
-    pending_breaks = sorted_idx[low_cut:high_cut]
+    absolute = set(sorted_idx[:low_cut])
+    pending = sorted_idx[low_cut:high_cut]
 
-    # 5. 斷點驗證與合併
-    # 初始斷點：頭、尾，加上所有 2% 絕對斷點
-    active_breaks = [0, total_entries] + [sim_to_break_idx[i] for i in absolute_breaks]
+    active_breaks = [0, total_entries] + [sim_to_break_idx[i] for i in absolute]
     active_breaks.sort()
 
-    # 依強度從弱到強檢查待定斷點
-    for sim_idx in reversed(pending_breaks):
+    for sim_idx in reversed(pending):
         bp_line = sim_to_break_idx[sim_idx]
-        # 尋找此擬定斷點在目前 active_breaks 中的左右邊界
-        left_bound = 0
-        right_bound = total_entries
+        left = right = 0
         for b in active_breaks:
             if b <= bp_line:
-                left_bound = b
+                left = b
             if b > bp_line:
-                right_bound = b
+                right = b
                 break
-        left_sentences = bp_line - left_bound
-        right_sentences = right_bound - bp_line
-        # 如果兩邊都 >= 合併常數，則確認該斷點，加入 active_breaks
-        if left_sentences >= min_sentences and right_sentences >= min_sentences:
+        if bp_line - left >= min_sentences and right - bp_line >= min_sentences:
             active_breaks.append(bp_line)
             active_breaks.sort()
-        else:
-            logger.debug(f"捨棄待定斷點 {bp_line} (左:{left_sentences}, 右:{right_sentences} < {min_sentences})")
+    return active_breaks, threshold
 
-    # 6. 建立斷點強度查詢表
-    bp_meta = {}
-    n_sims_bp = len(sims)
+
+def _build_bp_meta(sims: List[float], strengths: List[float],
+                    sorted_idx: List[int], sim_to_break_idx: List[int]) -> dict:
+    """建立斷點強度查詢表 {entry_idx -> {strength_pct, cosine, strength}}。"""
+    meta = {}
     for rank, sim_idx in enumerate(sorted_idx):
         bp_line = sim_to_break_idx[sim_idx]
-        bp_meta[bp_line] = {
-            'strength_pct': round((rank + 1) / n_sims_bp * 100, 1),
+        meta[bp_line] = {
+            'strength_pct': round((rank + 1) / len(sims) * 100, 1),
             'cosine': round(sims[sim_idx], 4),
-            'strength': round(strengths[sim_idx], 4),
+            'strength': round(1.0 - sims[sim_idx], 4),
         }
+    return meta
 
-    # 7. 雜訊過濾與產生最終段落
-    final_chunks = []
-    discarded_chunks = []
+
+def _bp_info(entry_idx: int, total_entries: int, bp_meta: dict) -> dict:
+    if entry_idx == 0:
+        return {'boundary_side': 'left', 'strength_pct': None, 'cosine': None, 'label': '檔案起點'}
+    if entry_idx == total_entries:
+        return {'boundary_side': 'right', 'strength_pct': None, 'cosine': None, 'label': '檔案終點'}
+    info = bp_meta.get(entry_idx)
+    if info:
+        return {**info, 'boundary_side': 'auto', 'label': f"{info['strength_pct']}%"}
+    return {'boundary_side': 'auto', 'strength_pct': None, 'cosine': None, 'label': '-'}
+
+
+def _build_segments(entries: List[SubtitleEntry], active_breaks: List[int],
+                     bp_meta: dict, file_id: int, total_entries: int,
+                     noise_drop_len: int, noise_weak_len: int,
+                     low_pct_threshold: float) -> tuple[List[Dict], List[Dict]]:
+    """從斷點列表產出最終段落與被排除段落。"""
+    final, discarded = [], []
     for i in range(len(active_breaks) - 1):
         start_idx = active_breaks[i]
-        end_idx = active_breaks[i+1] - 1
+        end_idx = active_breaks[i + 1] - 1
         chunk_len = end_idx - start_idx + 1
-        seg = entries[start_idx : end_idx + 1]
+        seg = entries[start_idx: end_idx + 1]
 
-        def _bp_info(entry_idx):
-            if entry_idx == 0:
-                return {'boundary_side': 'left', 'strength_pct': None, 'cosine': None, 'label': '檔案起點'}
-            if entry_idx == total_entries:
-                return {'boundary_side': 'right', 'strength_pct': None, 'cosine': None, 'label': '檔案終點'}
-            info = bp_meta.get(entry_idx)
-            if info:
-                return {**info, 'boundary_side': 'auto', 'label': f"{info['strength_pct']}%"}
-            return {'boundary_side': 'auto', 'strength_pct': None, 'cosine': None, 'label': '-'}
-
-        left_bp = _bp_info(start_idx)
-        right_bp = _bp_info(active_breaks[i + 1])
-
-        _chunk_base = {
+        chunk = {
             'chunk_id': f"{file_id}_{start_idx}",
             'start_time': seg[0].start_time,
             'end_time': seg[-1].end_time,
             'entry_count': chunk_len,
             'text_content': ' '.join(e.text for e in seg),
             'boundary_type': 'semantic',
-            'left_boundary': left_bp,
-            'right_boundary': right_bp,
+            'left_boundary': _bp_info(start_idx, total_entries, bp_meta),
+            'right_boundary': _bp_info(active_breaks[i + 1], total_entries, bp_meta),
         }
 
-        # 規則 A: <= 2 行直接拋棄
         if chunk_len <= noise_drop_len:
-            logger.info(f"過濾雜訊: 段落 [{start_idx}~{end_idx}] 僅 {chunk_len} 行 (<= {noise_drop_len}), 拋棄。")
-            _chunk_base['dropped'] = True
-            _chunk_base['drop_reason'] = f'noise_too_short (<= {noise_drop_len} lines)'
-            discarded_chunks.append(_chunk_base)
-            continue
+            chunk['dropped'] = True
+            chunk['drop_reason'] = f'noise_too_short (<= {noise_drop_len} lines)'
+            discarded.append(chunk)
+        elif chunk_len == noise_weak_len:
+            ls = bp_meta.get(start_idx, {}).get('strength', 0.0)
+            rs = bp_meta.get(active_breaks[i + 1], {}).get('strength', 0.0)
+            if ls >= low_pct_threshold and rs >= low_pct_threshold:
+                chunk['dropped'] = True
+                chunk['drop_reason'] = 'noise_weak_links (both ends below strong threshold)'
+                discarded.append(chunk)
+            else:
+                final.append(chunk)
+        else:
+            final.append(chunk)
+    return final, discarded
 
-        # 規則 B: == 3 行，且兩端皆為 < 2% 極弱連結，拋棄
-        if chunk_len == noise_weak_len:
-            l_strength = bp_meta.get(start_idx, {}).get('strength', 0.0)
-            r_strength = bp_meta.get(active_breaks[i + 1], {}).get('strength', 0.0)
-            if l_strength >= low_pct_strength_threshold and r_strength >= low_pct_strength_threshold:
-                logger.info(f"過濾雜訊: 段落 [{start_idx}~{end_idx}] 為 {noise_weak_len} 行且兩端皆為極弱連結，拋棄。")
-                _chunk_base['dropped'] = True
-                _chunk_base['drop_reason'] = 'noise_weak_links (both ends below strong threshold)'
-                discarded_chunks.append(_chunk_base)
-                continue
 
-        # 通過過濾
-        final_chunks.append(_chunk_base)
+def smart_merge_3_0(entries: List[SubtitleEntry], file_id: int,
+                    window_size: int = SMART_MERGE_WINDOW_SIZE,
+                    min_sentences: int = SMART_MERGE_MIN_SENTENCES,
+                    high_pct: float = SMART_MERGE_WEAK_PCT,
+                    low_pct: float = SMART_MERGE_STRONG_PCT,
+                    noise_drop_len: int = SMART_MERGE_NOISE_DROP_LEN,
+                    noise_weak_len: int = SMART_MERGE_NOISE_WEAK_LEN) -> tuple[List[Dict], List[int], List[Dict]]:
+    total_entries = len(entries)
+    if total_entries < window_size:
+        return [{'start_idx': 0, 'end_idx': total_entries - 1,
+                 'start_time': entries[0].start_time, 'end_time': entries[-1].end_time,
+                 'text': ' '.join(e.text for e in entries)}], [], []
+
+    windows = [' '.join(e.text for e in entries[i:i + window_size])
+               for i in range(total_entries - window_size + 1)]
+
+    vectors, failed_windows = _embed_windows(windows)
+
+    valid_count = sum(1 for v in vectors if v is not None)
+    if valid_count < 2:
+        return [], failed_windows, []
+    if valid_count < 5:
+        return [], failed_windows, []
+    logger.info(f"Embedding: {valid_count}/{len(windows)} vectors")
+
+    sims, sim_to_break_idx = _compute_similarities(vectors, window_size)
+    if not sims:
+        return [{'start_idx': 0, 'end_idx': total_entries - 1,
+                 'start_time': entries[0].start_time, 'end_time': entries[-1].end_time,
+                 'text': ' '.join(e.text for e in entries)}], failed_windows, []
+
+    n_sims = len(sims)
+    strengths = [1.0 - s for s in sims]
+    sorted_idx = sorted(range(n_sims), key=lambda x: strengths[x], reverse=True)
+
+    active_breaks, low_pct_threshold = _resolve_breakpoints(
+        sims, sorted_idx, sim_to_break_idx, total_entries, high_pct, low_pct, min_sentences)
+
+    bp_meta = _build_bp_meta(sims, strengths, sorted_idx, sim_to_break_idx)
+    final_chunks, discarded_chunks = _build_segments(
+        entries, active_breaks, bp_meta, file_id, total_entries,
+        noise_drop_len, noise_weak_len, low_pct_threshold)
 
     return final_chunks, failed_windows, discarded_chunks
 

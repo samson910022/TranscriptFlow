@@ -8,6 +8,7 @@ import json
 import re
 import time
 from typing import List, Optional
+import requests
 
 from config_loader import get_api_config, get_env_or_config
 
@@ -17,6 +18,8 @@ CHAT_ENDPOINT = _api_cfg['chat_completions_path']
 API_KEY = _api_cfg['api_key']
 MAX_RETRIES = get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3)
 TIMEOUT_SEC = get_env_or_config('TIMEOUT_SEC', 'summarization.timeout_sec', 120)
+
+_session = requests.Session()
 
 
 def get_models(config_key: str = 'summarization.models',
@@ -66,8 +69,7 @@ def call_llm(prompt: str, model: str = None, system_prompt: str = None,
             "timeout": TIMEOUT_SEC,
         }
         try:
-            import requests
-            resp = requests.post(
+            resp = _session.post(
                 f"{API_BASE_URL.rstrip('/')}{CHAT_ENDPOINT}",
                 headers=headers, json=payload, timeout=TIMEOUT_SEC + 10
             )
