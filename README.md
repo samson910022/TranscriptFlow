@@ -253,11 +253,11 @@ Windows of 10 entries with 5-entry overlap (configurable via `srt_quality.window
 
 ### Model Groups
 
-Multiple model groups can run simultaneously with independent concurrency settings:
+Multiple model groups can run simultaneously with independent concurrency settings. `concurrency` controls how many **windows** are processed at once within a group; all models in a group are called **simultaneously** per window via an inner thread pool:
 
 ```json
 "srt_quality": {
-  "concurrency": [5, 7, 7],
+  "concurrency": [9, 3, 9],
   "model_groups": [
     ["oci-openai.gpt-oss-120b", "NV-gpt-oss-120b"],
     ["oci-meta.llama-3.3-70b-instruct"],
@@ -266,9 +266,11 @@ Multiple model groups can run simultaneously with independent concurrency settin
 }
 ```
 
-- Each group lists models called **in parallel** per window (load distribution).
-- Groups execute **concurrently** via `ThreadPoolExecutor`.
-- Per-group concurrency caps total concurrent LLM calls within that group.
+- Each group lists models called **simultaneously** per window (load distribution).
+- Groups execute **concurrently** via `ThreadPoolExecutor(max_workers=num_groups)`.
+- `concurrency` is an array: group0=9 windows, group1=3 windows, group2=9 windows at a time.
+- Total concurrent LLM calls per group ≈ `concurrency × len(models)`.
+- Single integer remains backward-compatible (applied to all groups).
 - Fallback: single `models` or `summarization.models` if `model_groups` is absent.
 
 ### Consensus Severity

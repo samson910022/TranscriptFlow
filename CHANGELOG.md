@@ -4,9 +4,10 @@
 
 ### 🚀 New Features
 
-- **`srt_quality_check.py`: Multi-model-group parallel execution** — `model_groups` config supports multiple model lists; each group's models are called concurrently per window for load distribution. Groups execute in parallel via `ThreadPoolExecutor`.
+- **`srt_quality_check.py`: Multi-model-group parallel execution** — `model_groups` config supports multiple model lists; each group's models are called simultaneously per window for load distribution. Groups execute in parallel via `ThreadPoolExecutor`.
+- **Nested parallelism model** — `concurrency` controls the number of **windows** processed simultaneously; all models within a group fire concurrently per window via an inner thread pool. Total concurrent LLM calls ≈ `concurrency × len(models)`. Fixes the bottleneck where a flat pool serialized multi-model groups.
 - **Consensus merge report** — Cross-group flagged lines are merged into a single report. Severity determined by configurable thresholds (`consensus_thresholds`, default `[0.2, 0.6]`): <20% ✅ clean, 20–60% 🟡 questionable, ≥60% 🔴 problem.
-- **Per-group independent concurrency** — `srt_quality.concurrency` accepts an array (e.g., `[5, 7, 7]`) for per-group LLM call caps. Single integer remains backward-compatible.
+- **Per-group independent concurrency** — `srt_quality.concurrency` accepts an array (e.g., `[9, 3, 9]`) for per-group concurrency. Single integer remains backward-compatible.
 - **Batch file ID range** — `--file-id 0-2` syntax for processing a range of files.
 - **Supplementary boundary windows** — First/last `stride` rows now get extra wider windows to ensure equal double-review coverage alongside middle rows.
 - **Model timing statistics** — Merged report header includes per-model average response time, completed segments count, per-group wall-clock time, and total elapsed.

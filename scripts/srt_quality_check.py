@@ -124,59 +124,59 @@ def call_llm_single(window_text: str, model: str) -> dict:
 def run_one_group(windows, models, concurrency, group_label='group0', window_size=10):
     from collections import defaultdict
 
-    total_tasks = len(windows) * len(models)
+    total_windows = len(windows)
     done_count = 0
     lock = __import__('threading').Lock()
-    results_by_window = defaultdict(list)
-    num_entries_by_window = {}
+    windows_results = []
     model_stats = defaultdict(lambda: {"total_elapsed": 0.0, "count": 0})
 
-    def process_one_task(win_start, win_entries, model):
+    def process_one_window(win_start, win_entries):
         window_text = format_window(win_entries, win_start)
-        result = call_llm_single(window_text, model)
+        merged_flagged = {}
+
+        def call_one_model(model):
+            result = call_llm_single(window_text, model)
+            return {
+                'model': model,
+                'flagged_entries': result.get('flagged_entries', {}),
+                'elapsed': result.get('elapsed', 0.0)
+            }
+
+        model_results = []
+        with ThreadPoolExecutor(max_workers=len(models)) as mex:
+            mfutures = {mex.submit(call_one_model, m): m for m in models}
+            for mfut in as_completed(mfutures):
+                mr = mfut.result()
+                model_results.append(mr)
+                for k, v in mr['flagged_entries'].items():
+                    if k not in merged_flagged or v.get('severity') == 'major':
+                        merged_flagged[k] = v
+
+        with lock:
+            for mr in model_results:
+                m = mr['model']
+                model_stats[m]["total_elapsed"] += mr['elapsed']
+                model_stats[m]["count"] += 1
+
         return {
             'window_start': win_start,
-            'model': model,
-            'flagged_entries': result.get('flagged_entries', {}),
-            'num_entries': len(win_entries),
-            'elapsed': result.get('elapsed', 0.0)
+            'group_label': group_label,
+            'flagged_entries': merged_flagged,
+            'num_entries': len(win_entries)
         }
 
     with ThreadPoolExecutor(max_workers=concurrency) as ex:
-        futures = {}
-        for win_start, win_entries in windows:
-            num_entries_by_window[win_start] = len(win_entries)
-            for model in models:
-                fut = ex.submit(process_one_task, win_start, win_entries, model)
-                futures[fut] = (win_start, model)
-
+        futures = {ex.submit(process_one_window, ws, we): (ws, we) for ws, we in windows}
         for fut in as_completed(futures):
             result = fut.result()
-            ws = result['window_start']
-            results_by_window[ws].append(result['flagged_entries'])
-            m = result['model']
-            model_stats[m]["total_elapsed"] += result['elapsed']
-            model_stats[m]["count"] += 1
+            windows_results.append(result)
             with lock:
                 done_count += 1
-                num_entries = result['num_entries']
+                num_entries = result.get('num_entries', window_size)
+                ws = result.get('window_start', 0)
                 we = ws + num_entries - 1
-                print(f"  [{done_count}/{total_tasks}] [{group_label}] "
+                print(f"  [{done_count}/{total_windows}] [{group_label}] "
                       f"window {ws + 1}~{we + 1}", flush=True)
-
-    windows_results = []
-    for ws in sorted(results_by_window):
-        merged = {}
-        for flagged in results_by_window[ws]:
-            for k, v in flagged.items():
-                if k not in merged or v.get('severity') == 'major':
-                    merged[k] = v
-        windows_results.append({
-            'window_start': ws,
-            'group_label': group_label,
-            'flagged_entries': merged,
-            'num_entries': num_entries_by_window.get(ws, window_size)
-        })
 
     return {"windows_results": windows_results, "model_stats": dict(model_stats)}
 
