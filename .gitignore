@@ -23,6 +23,7 @@ structured_yt_data/
 .progress/
 .failed_reports/
 *.log
+*.docx
 
 # OS/editor noise
 .DS_Store

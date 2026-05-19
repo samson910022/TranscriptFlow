@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.7 (2026-05-19): Multi-Group Consensus, Parallel Groups & Timing Stats
+
+### 🚀 New Features
+
+- **`srt_quality_check.py`: Multi-model-group parallel execution** — `model_groups` config supports multiple model lists; each group's models are called concurrently per window for load distribution. Groups execute in parallel via `ThreadPoolExecutor`.
+- **Consensus merge report** — Cross-group flagged lines are merged into a single report. Severity determined by configurable thresholds (`consensus_thresholds`, default `[0.2, 0.6]`): <20% ✅ clean, 20–60% 🟡 questionable, ≥60% 🔴 problem.
+- **Per-group independent concurrency** — `srt_quality.concurrency` accepts an array (e.g., `[5, 7, 7]`) for per-group LLM call caps. Single integer remains backward-compatible.
+- **Batch file ID range** — `--file-id 0-2` syntax for processing a range of files.
+- **Supplementary boundary windows** — First/last `stride` rows now get extra wider windows to ensure equal double-review coverage alongside middle rows.
+- **Model timing statistics** — Merged report header includes per-model average response time, completed segments count, per-group wall-clock time, and total elapsed.
+
+### 🔧 Improvements
+
+- `line_coverage_counts()` now computes coverage from actual windows (including supplementaries) instead of formula.
+- `aggregate_flags()` and merged report row validation use per-window entry count instead of fixed `window_size`.
+- `.gitignore` updated: `*.docx` ignored.
+- `config.example.json` updated with `srt_quality` block.
+- Evaluation scripts (`evaluate_chunks.py`, `evaluate_summary_fidelity.py`) default output to subdirs under `output_dir`.
+
 ## v1.6 (2026-05-16): Pipeline Recovery, Idempotent Writes & Live Validation
 
 ### Reliability

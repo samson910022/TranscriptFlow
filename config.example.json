@@ -53,6 +53,11 @@
   "watchdog": {
     "max_working_time_sec": 600
   },
+  "srt_quality": {
+    "concurrency": 5,
+    "window_size": 10,
+    "stride": 5
+  },
   "monitoring": {
     "heartbeat_interval_sec": 300
   }

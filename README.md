@@ -238,17 +238,74 @@ Do not commit `.env`, `config.json`, `test_params_suite.json`, generated output,
 
 ## SRT Quality Check
 
-Sliding-window LLM evaluation to find transcription errors or illogical segments:
+Multi-model-group LLM evaluation to find transcription errors or illogical segments. Supports parallel model groups, consensus-based severity aggregation, and per-model timing statistics.
 
 ```bash
 python3 scripts/srt_quality_check.py --file-id 3
-python3 scripts/srt_quality_check.py --file-id 3 --interactive   # human-in-the-loop
-python3 scripts/srt_quality_check.py --input sample.srt --output report.txt
+python3 scripts/srt_quality_check.py --file-id 0-2          # batch range
+python3 scripts/srt_quality_check.py --file-id 3 --interactive  # human-in-the-loop
+python3 scripts/srt_quality_check.py --input sample.srt
 ```
 
-Windows of 10 entries with 5-entry overlap. Each entry flagged by ≥2 windows → 🔴 **problem**, 1 window → 🟡 **questionable**. Scores 4 dimensions (0-25 each): coherence, logic, wording quality, timestamp合理性.
+### Sliding Window
 
-Concurrent processing via `ThreadPoolExecutor` (default 5 workers). Configurable in `config.json` under `srt_quality.concurrency` or via `--concurrency N`. Evaluation model set via `srt_quality.models` (fallback: `summarization.models`).
+Windows of 10 entries with 5-entry overlap (configurable via `srt_quality.window_size` and `srt_quality.stride` in `config.json`, or `--window-size` / `--stride` CLI flags). Boundary rows (first/last `stride` entries) receive supplementary wider windows to ensure equal double-review coverage.
+
+### Model Groups
+
+Multiple model groups can run simultaneously with independent concurrency settings:
+
+```json
+"srt_quality": {
+  "concurrency": [5, 7, 7],
+  "model_groups": [
+    ["oci-openai.gpt-oss-120b", "NV-gpt-oss-120b"],
+    ["oci-meta.llama-3.3-70b-instruct"],
+    ["oci-cohere.command-a-03-2025"]
+  ]
+}
+```
+
+- Each group lists models called **in parallel** per window (load distribution).
+- Groups execute **concurrently** via `ThreadPoolExecutor`.
+- Per-group concurrency caps total concurrent LLM calls within that group.
+- Fallback: single `models` or `summarization.models` if `model_groups` is absent.
+
+### Consensus Severity
+
+Flagged lines from all groups are merged into a single report with consensus-based severity:
+
+| Consensus Ratio | Tag | Meaning |
+|---|---|---|
+| <20% | ✅ Clean | Most inspectors agree it's fine |
+| 20–60% | 🟡 Questionable | Mixed signals |
+| ≥60% | 🔴 Problem | Strong multi-model agreement |
+
+Consensus thresholds configurable via `srt_quality.consensus_thresholds` (default `[0.2, 0.6]`).
+
+### Output Structure
+
+```
+{paths.output_dir}/srt_quality_report/
+├── {id}_srt_quality_report_merged_{timestamp}.txt    ← consensus report with stats
+└── group_raw/
+    ├── {id}_srt_quality_report_group0_{timestamp}.txt
+    ├── {id}_srt_quality_report_group1_{timestamp}.txt
+    └── {id}_srt_quality_report_group2_{timestamp}.txt
+```
+
+The merged report header includes per-model average response time, completed segments count, and per-group wall-clock timing.
+
+### CLI Flags
+
+| Flag | Description |
+|---|---|
+| `--file-id` | Single ID (`3`) or range (`0-2`) |
+| `--input` | Direct `.srt` file (single-model only) |
+| `--interactive` | Human-in-the-loop correction mode |
+| `--window-size` | Override `srt_quality.window_size` |
+| `--stride` | Override `srt_quality.stride` |
+| `--concurrency` | Override concurrency (applies to all groups) |
 
 ## B+ Chunk Quality Evaluation
 

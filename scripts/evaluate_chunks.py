@@ -86,15 +86,11 @@ def call_llm_evaluate(chunk: dict) -> dict:
 段落內容:
 {chunk.get('text_content', '')}
 
-評分標準（總分 100）：
+評分標準（總分 30）：
 
-1. 邊界合理性 (50分):
-   a. 內部連貫性 (0-25): 段落內的主題是否一致、語句是否連貫
-   b. 斷點合理與否 (0-25): 此段落的起點和終點是否為合理的斷點位置
-
-2. 雜訊處理 (50分):
-   a. 應丟棄未丟棄 (0-25): 若此段落被保留，是否該被保留？（保留合理 → 高分）
-   b. 不應丟棄被丟棄 (0-25): 若此段落被排除，是否該被排除？（排除合理 → 高分）
+1. 內部連貫性 (0-10): 段落內的主題是否一致、語句是否連貫
+2. 斷點正確性 (0-10): 此段落的起點和終點是否為合理的斷點位置
+3. 雜訊處理 (0-10): 該丟的／不該丟的判斷是否合理
 
 請以 JSON 格式回覆：
 {{
@@ -127,6 +123,7 @@ def main():
     parser.add_argument('--output', default=None, help='輸出目錄')
     parser.add_argument('--sample', type=int, default=0,
                         help='每個 config 取樣 N 個 chunks 評分（0=全部）')
+    parser.add_argument('--dir', type=str, default=None, help='支援舊版 --dir 參數')
     args = parser.parse_args()
 
     groups = collect_reports(args.reports)
@@ -138,7 +135,10 @@ def main():
     for label, reports in groups.items():
         print(f"  {label}: {len(reports)} 個 report 檔案")
 
-    output_dir = args.output or '.'
+    output_dir = args.output
+    if not output_dir:
+        base_dir = get_env_or_config('SRT_OUTPUT_DIR', 'paths.output_dir', '.')
+        output_dir = os.path.join(base_dir, 'chunk_evaluation')
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -206,11 +206,11 @@ def main():
         report_lines.append(f"  Config: {res['label']:^74}")
         _hline()
         s = res['scores']
-        report_lines.append(f"  內部連貫性 (0-25):        {s.get('boundary_coherence', 0):>5.1f}")
-        report_lines.append(f"  斷點合理與否 (0-25):      {s.get('boundary_correctness', 0):>5.1f}")
-        report_lines.append(f"  雜訊處理     (0-50):      {s.get('noise_handling', 0):>5.1f}")
+        report_lines.append(f"  內部連貫性 (0-10):        {s.get('boundary_coherence', 0):>5.1f}")
+        report_lines.append(f"  斷點正確性 (0-10):        {s.get('boundary_correctness', 0):>5.1f}")
+        report_lines.append(f"  雜訊處理   (0-10):        {s.get('noise_handling', 0):>5.1f}")
         report_lines.append(f"  ─────────────────────────────")
-        report_lines.append(f"  總分         (0-100):     {s.get('total', 0):>5.1f}")
+        report_lines.append(f"  總分       (0-30):        {s.get('total', 0):>5.1f}")
         report_lines.append(f"  評估 chunk 數:             {res['chunk_count']}")
         _sep()
 

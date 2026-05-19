@@ -120,7 +120,10 @@ def main():
     for model, segs in sorted(by_model.items()):
         print(f"  {model}: {len(segs)} chunks")
 
-    output_dir = args.output or '.'
+    output_dir = args.output
+    if not output_dir:
+        base_dir = get_env_or_config('SRT_OUTPUT_DIR', 'paths.output_dir', '.')
+        output_dir = os.path.join(base_dir, 'summary_fidelity')
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
