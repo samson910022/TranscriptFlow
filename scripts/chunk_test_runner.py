@@ -14,8 +14,6 @@ import argparse
 import json
 import os
 import sys
-import time
-import re
 from datetime import datetime
 from typing import List, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,20 +21,14 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config_loader import get_env_or_config, get_api_config, get_nested_config
+from config_loader import get_env_or_config, get_nested_config
 from parse_srt import parse_srt, SubtitleEntry
 from semantic_chunk import smart_merge_3_0
 from logger_config import get_logger
-from llm_client import call_llm as _call_llm
+from llm_client import call_llm as _call_llm, extract_participants
 
 logger = get_logger('chunk_test_runner')
-
-_api_cfg = get_api_config()
-API_BASE_URL = _api_cfg['base_url']
-CHAT_ENDPOINT = _api_cfg['chat_completions_path']
-API_KEY = _api_cfg['api_key']
 MAX_RETRIES = get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3)
-TIMEOUT_SEC = get_env_or_config('TIMEOUT_SEC', 'summarization.timeout_sec', 120)
 
 SYSTEM_PROMPT = """你是一個摘要助理。請根據以下文字區塊，直接輸出摘要內容，不要使用「這段文字」、「本文」、「該段落」等引導詞。
 
@@ -70,54 +62,6 @@ def get_models(override: list = None) -> List[str]:
 
 def call_llm(text: str, model: str) -> dict:
     return _call_llm(prompt=text, model=model, system_prompt=SYSTEM_PROMPT)
-
-
-def extract_participants(chunks: List[Dict]) -> List[str]:
-    participant_chunks = get_env_or_config('PARTICIPANT_CHUNKS', 'summarization.participant_chunks', 3)
-    eligible = chunks[:participant_chunks]
-    if not eligible:
-        return []
-    opening_text = '\n'.join(c['text_content'] for c in eligible)
-    models = get_models()
-    prompt = (
-        "以下是一個影片開場字幕。請從對話中找出實際有在節目中發言的人（主持人、來賓）。"
-        "判斷依據：該人物有使用第一人稱發言、被主持人介紹為來賓、或參與對話輪替。"
-        "不要列出被討論但沒有實際發言的人物（例如書的作者、歷史人物、名人、專家等）。"
-        "只輸出實際參與對話的真實人名或常用暱稱。"
-        "用 JSON 格式回傳：\n"
-        '{"participants": ["名字 1", "名字 2", ...]}'
-        f"\n\n開場字幕：\n{opening_text}"
-    )
-    for attempt in range(1, MAX_RETRIES + 1):
-        model = models[(attempt - 1) % len(models)]
-        try:
-            import requests
-            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
-            payload = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": "你是一個影片分析助理,專門識別節目中的講者。"},
-                    {"role": "user", "content": prompt},
-                ],
-                "timeout": 120,
-            }
-            resp = requests.post(f"{API_BASE_URL.rstrip('/')}{CHAT_ENDPOINT}",
-                                 headers=headers, json=payload, timeout=150)
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-            if content is None:
-                raise ValueError("LLM returned null content")
-            content = content.strip()
-            m = re.search(r'\{[^{}]*\}', content, re.DOTALL)
-            data = json.loads(m.group()) if m else json.loads(content)
-            participants = data.get("participants", [])
-            logger.info(f"Participants extracted ({model}): {participants}")
-            return participants
-        except Exception as exc:
-            logger.warning(f"Participants extraction attempt {attempt} with {model}: {exc}")
-            if attempt < MAX_RETRIES:
-                time.sleep(2 ** attempt)
-    return []
 
 
 def summarize_chunk(chunk: dict, models: List[str]) -> dict:
