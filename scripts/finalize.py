@@ -11,32 +11,41 @@ from typing import List, Dict, Tuple
 import pyarrow as pa
 import pandas as pd
 import time
+import lancedb
 
 # Local imports
 from state_manager import update_state, set_status_file
-import lancedb
 from logger_config import get_logger
 from config_loader import get_env_or_config, validate_config, check_required_env_vars, sanitize_api_url, ensure_secure_permissions, validate_path
 
 logger = get_logger('finalize')
 
-# 驗證必要環境變數
-required_ok, missing = check_required_env_vars()
-if not required_ok:
-    raise RuntimeError(f'必要環境變數未設定:{missing}')
+# Environment / config (lazy: validated on first write_to_db call)
+_CONFIG_INITIALIZED = False
+PROJECT_ROOT = None
+OUTPUT_DIR = None
+DB_FINAL = None
+TABLE_NAME = None
+BACKUP_DIR = None
+EXPECTED_DIM = None
 
-# 驗證配置參數
-validation_errors = validate_config()
-if validation_errors:
-    raise ValueError('配置驗證失敗:\n' + '\n'.join(f' - {e}' for e in validation_errors))
-
-# Environment / config
-PROJECT_ROOT = os.getenv('SRT_PROJECT_ROOT', os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
-OUTPUT_DIR = os.getenv('SRT_OUTPUT_DIR', './output')
-DB_FINAL = get_env_or_config('SRT_DB_PATH', 'paths.db_path', os.path.join(OUTPUT_DIR, 'lance_test_db'))  # 最終寫入位置
-TABLE_NAME = get_env_or_config('SRT_TABLE_NAME', 'tables.final_db', 'psychology_kb')
-BACKUP_DIR = get_env_or_config('SRT_BACKUP_DIR', 'paths.backup_dir', './output/lance_backup')
-EXPECTED_DIM = get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072)
+def _ensure_config():
+    global _CONFIG_INITIALIZED, PROJECT_ROOT, OUTPUT_DIR, DB_FINAL, TABLE_NAME, BACKUP_DIR, EXPECTED_DIM
+    if _CONFIG_INITIALIZED:
+        return
+    required_ok, missing = check_required_env_vars()
+    if not required_ok:
+        raise RuntimeError(f'必要環境變數未設定:{missing}')
+    validation_errors = validate_config()
+    if validation_errors:
+        raise ValueError('配置驗證失敗:\n' + '\n'.join(f' - {e}' for e in validation_errors))
+    PROJECT_ROOT = os.getenv('SRT_PROJECT_ROOT', os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
+    OUTPUT_DIR = os.getenv('SRT_OUTPUT_DIR', './output')
+    DB_FINAL = get_env_or_config('SRT_DB_PATH', 'paths.db_path', os.path.join(OUTPUT_DIR, 'lance_test_db'))
+    TABLE_NAME = get_env_or_config('SRT_TABLE_NAME', 'tables.final_db', 'psychology_kb')
+    BACKUP_DIR = get_env_or_config('SRT_BACKUP_DIR', 'paths.backup_dir', './output/lance_backup')
+    EXPECTED_DIM = get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072)
+    _CONFIG_INITIALIZED = True
 
 
 def deduplicate_records(records: List[Dict]) -> List[Dict]:
@@ -124,7 +133,8 @@ def _preflight_table_schema(table) -> Tuple[bool, str]:
     return True, "ok"
 
 
-def write_to_db(records: List[Dict]) -> Tuple[bool, str]:
+def write_to_db(records: List[Dict], allow_delete: bool = False) -> Tuple[bool, str]:
+    _ensure_config()
     records = deduplicate_records(records)
     if not records:
         return True, "No records to write"
@@ -147,17 +157,16 @@ def write_to_db(records: List[Dict]) -> Tuple[bool, str]:
         if not ok:
             return False, schema_msg
 
-        file_ids = sorted({r["file_id"] for r in records})
-        conditions = [f"file_id = {file_id}" for file_id in file_ids]
-        delete_condition = " OR ".join(conditions)
-        (
-            table.merge_insert("chunk_id")
-            .when_matched_update_all()
-            .when_not_matched_insert_all()
-            .when_not_matched_by_source_delete(delete_condition)
-            .execute(records)
-        )
-        logger.info(f"LanceDB merge upsert: {len(records)} records")
+        merge = table.merge_insert("chunk_id")
+        merge.when_matched_update_all()
+        merge.when_not_matched_insert_all()
+        if allow_delete:
+            file_ids = sorted({r["file_id"] for r in records})
+            conditions = [f"file_id = {file_id}" for file_id in file_ids]
+            delete_condition = " OR ".join(conditions)
+            merge.when_not_matched_by_source_delete(delete_condition)
+        merge.execute(records)
+        logger.info(f"LanceDB merge upsert: {len(records)} records (allow_delete={allow_delete})")
         return True, f"Written {len(records)} records to {TABLE_NAME}"
     except Exception as e:
         return False, str(e)

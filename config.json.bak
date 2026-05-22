@@ -1,0 +1,96 @@
+{
+  "_comment": "TranscriptFlow config — adapted from srt-semantic-chunk-opencode/scripts/config.json",
+  "api": {
+    "_comment": "base_url for new code; primary.proxy_url for backward compat",
+    "base_url": "http://127.0.0.1:4000",
+    "primary": {
+      "proxy_url": "http://127.0.0.1:4000"
+    },
+    "fallback": {
+      "proxy_url": "http://100.109.118.67:4000"
+    },
+    "api_timeout": 60,
+    "chat_completions_path": "/v1/chat/completions",
+    "embeddings_path": "/v1/embeddings",
+    "models_path": "/v1/models"
+  },
+  "chunking": {
+    "smart_merge_window_size": 5,
+    "smart_merge_strong_pct": 0.02,
+    "smart_merge_weak_pct": 0.05,
+    "smart_merge_min_sentences": 8,
+    "smart_merge_noise_drop_len": 2,
+    "smart_merge_noise_weak_len": 3,
+    "min_chunks": 2,
+    "max_chunks": 200
+  },
+  "embedding": {
+    "model": "NV-llama-embed",
+    "expected_dim": 2048,
+    "batch_max_size": 64,
+    "timeout": 60
+  },
+  "paths": {
+    "output_dir": "/Volumes/SAMSON/turn_key-solution/output",
+    "db_path": "/Users/samson1357924/Documents/srt-semantic-chunk-opencode/lancedb",
+    "master_file": "/Volumes/SAMSON/turn_key-solution/master_file_manifest.json",
+    "data_dir": "/Volumes/SAMSON/turn_key-solution/data/YT_backup",
+    "backup_dir": "/Volumes/SAMSON/turn_key-solution/output/lance_backup"
+  },
+  "summarization": {
+    "models": [
+      "oci-openai.gpt-oss-120b",
+      "oci-openai.gpt-oss-120b",
+      "gemma-4-31b-it",
+      "oci-openai.gpt-oss-120b",
+      "oci-google.gemini-2.5-flash",
+      "oci-meta.llama-3.3-70b-instruct",
+      "NV-Mistral-Small-4-119B",
+      "oci-openai.gpt-oss-120b",
+      "NV-deepseek-v4-flash",
+      "oci-meta.llama-3.3-70b-instruct",
+      "oci-openai.gpt-oss-120b",
+      "NV-minimax-m2.7",
+      "oci-cohere.command-a-03-2025",
+      "oci-cohere.command-r-plus-08-2024",
+      "NV-nemotron-3-nano-omni-30b"
+    ],
+    "participant_chunks": 3,
+    "max_retries": 3,
+    "concurrency": 5,
+    "timeout_sec": 120
+  },
+  "tables": {
+    "final_db": "psychology_kb"
+  },
+  "phase_concurrency": {
+    "phase1_chunking": 1,
+    "phase2_summarizing": 2,
+    "phase3_embedding": 1,
+    "phase4_db_insert": 1
+  },
+  "chunk_test": {
+    "concurrency": 5
+  },
+  "srt_quality": {
+    "concurrency": 7,
+    "window_size": 10,
+    "stride": 5,
+    "consensus_thresholds": [0.2, 0.6],
+    "model_groups": [
+      ["oci-openai.gpt-oss-120b", "NV-gpt-oss-120b"],
+      ["oci-meta.llama-3.3-70b-instruct"],
+      ["oci-cohere.command-a-03-2025"]
+    ]
+  },
+  "evaluation": {
+    "chunk_models": ["oci-openai.gpt-oss-120b"],
+    "fidelity_models": ["oci-openai.gpt-oss-120b"]
+  },
+  "watchdog": {
+    "max_working_time_sec": 600
+  },
+  "monitoring": {
+    "heartbeat_interval_sec": 300
+  }
+}

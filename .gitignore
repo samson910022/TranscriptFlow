@@ -25,6 +25,10 @@ structured_yt_data/
 *.log
 *.docx
 
+# OpenCode project config (not upstream)
+AGENTS.md
+.opencode/
+
 # OS/editor noise
 .DS_Store
 .idea/

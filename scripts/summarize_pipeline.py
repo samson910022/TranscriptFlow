@@ -383,6 +383,9 @@ def _incremental_write_chunk(batch_file, file_id, ch):
 
 
 def main(input_file: str, output_file: str, batch_file: str = None):
+    global _model_counter
+    _model_counter = 0
+
     # [Hybrid] Step 1: 基礎設施檢查 (B1 方案)
     if not os.path.exists(input_file):
         raise FileNotFoundError(f"輸入檔案不存在：{input_file}")

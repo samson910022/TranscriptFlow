@@ -7,6 +7,7 @@ llm_client.py — 統一 LLM API 呼叫客戶端
 import json
 import re
 import time
+import threading
 from typing import List, Optional
 import requests
 
@@ -19,7 +20,12 @@ API_KEY = _api_cfg['api_key']
 MAX_RETRIES = get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3)
 TIMEOUT_SEC = get_env_or_config('TIMEOUT_SEC', 'summarization.timeout_sec', 120)
 
-_session = requests.Session()
+_session = threading.local()
+
+def _get_session() -> requests.Session:
+    if not hasattr(_session, "s"):
+        _session.s = requests.Session()
+    return _session.s
 
 
 def get_models(config_key: str = 'summarization.models',
@@ -69,7 +75,7 @@ def call_llm(prompt: str, model: str = None, system_prompt: str = None,
             "timeout": TIMEOUT_SEC,
         }
         try:
-            resp = _session.post(
+            resp = _get_session().post(
                 f"{API_BASE_URL.rstrip('/')}{CHAT_ENDPOINT}",
                 headers=headers, json=payload, timeout=TIMEOUT_SEC + 10
             )

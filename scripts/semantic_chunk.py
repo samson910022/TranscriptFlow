@@ -29,6 +29,10 @@ SMART_MERGE_NOISE_WEAK_LEN = get_env_or_config('SMART_MERGE_NOISE_WEAK_LEN', 'ch
 MIN_CHUNKS = get_env_or_config('MIN_CHUNKS', 'chunking.min_chunks', 2)
 MAX_CHUNKS = get_env_or_config('MAX_CHUNKS', 'chunking.max_chunks', 200)
 
+# ── Embedding validation thresholds ───────────────────────────────────────────
+MIN_VALID_VECTORS = 2
+VALID_VECTORS_FOR_SIMILARITY = 5
+
 # ── Progress tracking parameters ──────────────────────────────────────────────
 PROGRESS_INTERVAL = 50
 PROGRESS_DIR = os.path.join(os.getenv('SRT_OUTPUT_DIR', './output'), '.progress')
@@ -297,9 +301,9 @@ def smart_merge_3_0(entries: List[SubtitleEntry], file_id: int,
     vectors, failed_windows = _embed_windows(windows)
 
     valid_count = sum(1 for v in vectors if v is not None)
-    if valid_count < 2:
+    if valid_count < MIN_VALID_VECTORS:
         return [], failed_windows, []
-    if valid_count < 5:
+    if valid_count < VALID_VECTORS_FOR_SIMILARITY:
         return [], failed_windows, []
     logger.info(f"Embedding: {valid_count}/{len(windows)} vectors")
 

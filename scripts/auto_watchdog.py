@@ -18,7 +18,7 @@ from datetime import datetime
 import requests
 
 from logger_config import get_logger
-from state_manager import update_state, set_status_file, load_status, acquire_phase_slot, release_phase_slot
+from state_manager import update_state, set_status_file, load_status, acquire_phase_slot, release_file_phase_slot
 from config_loader import get_env_or_config, get_api_config
 
 logger = get_logger('auto_watchdog')
@@ -454,7 +454,7 @@ def main():
                                     break
                             except Exception:
                                 logger.debug(f"無法處理失敗任務: 檔案 {file_id}, batch {bf}")
-                    release_phase_slot(phase)
+                    release_file_phase_slot(file_id, phase)
                     active_processes.remove(entry)
 
             if len(active_processes) < MAX_CONCURRENCY:

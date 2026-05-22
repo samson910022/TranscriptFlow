@@ -21,29 +21,60 @@ from state_manager import update_state, load_status, set_status_file, _locked_re
 logger = get_logger('summarize')
 
 PROJECT_ROOT = os.getenv('SRT_PROJECT_ROOT', os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-# 使用當前 python3 直譯器（不再依賴特定 venv 路徑）
 PYTHON_EXE = 'python3'
 
-# 從 config.json 讀取 API 配置(環境變數可覆蓋)
-_api_cfg = get_api_config()
-API_BASE_URL = _api_cfg['base_url']
-EMBEDDING_API_BASE = _api_cfg['embedding_url']
-API_KEY = _api_cfg['api_key']
-CHAT_ENDPOINT = _api_cfg['chat_completions_path']
-EMBEDDINGS_ENDPOINT = _api_cfg['embeddings_path']
-MODELS_ENDPOINT = _api_cfg['models_path']
-if not API_KEY:
-    raise RuntimeError('API key 未設定 - 請在 config.json api.api_key 或環境變數 OPENAI_API_KEY 中設定')
-MAX_RETRIES = get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3)
+# Lazy config initialization (avoid module-level side effects)
+_LAZY_CONFIG = None
 
-# Initialize unified BatchEmbeddingClient for embedding generation (H1+H3)
-_batch_embedding_client = BatchEmbeddingClient(
-    api_base=EMBEDDING_API_BASE,
-    api_key=API_KEY,
-    model=get_env_or_config('EMBEDDING_MODEL', 'embedding.model', 'text-embedding-3-large'),
-    timeout=get_env_or_config('EMBEDDING_TIMEOUT', 'embedding.timeout', 60),
-    expected_dim=get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072),
-)
+def _get_lazy_config():
+    global _LAZY_CONFIG
+    if _LAZY_CONFIG is None:
+        _api_cfg = get_api_config()
+        api_key = _api_cfg['api_key']
+        if not api_key:
+            raise RuntimeError('API key 未設定 - 請在 config.json api.api_key 或環境變數 OPENAI_API_KEY 中設定')
+        _LAZY_CONFIG = {
+            "API_BASE_URL": _api_cfg['base_url'],
+            "EMBEDDING_API_BASE": _api_cfg['embedding_url'],
+            "API_KEY": api_key,
+            "CHAT_ENDPOINT": _api_cfg['chat_completions_path'],
+            "EMBEDDINGS_ENDPOINT": _api_cfg['embeddings_path'],
+            "MODELS_ENDPOINT": _api_cfg['models_path'],
+            "MAX_RETRIES": get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3),
+            "_batch_embedding_client": BatchEmbeddingClient(
+                api_base=_api_cfg['embedding_url'],
+                api_key=api_key,
+                model=get_env_or_config('EMBEDDING_MODEL', 'embedding.model', 'text-embedding-3-large'),
+                timeout=get_env_or_config('EMBEDDING_TIMEOUT', 'embedding.timeout', 60),
+                expected_dim=get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072),
+            ),
+        }
+    return _LAZY_CONFIG
+
+# Module-level aliases for backward compat (lazy-populated by _init_lazy_globals)
+API_BASE_URL = None
+EMBEDDING_API_BASE = None
+API_KEY = None
+CHAT_ENDPOINT = None
+EMBEDDINGS_ENDPOINT = None
+MODELS_ENDPOINT = None
+MAX_RETRIES = None
+_batch_embedding_client = None
+
+def _init_lazy_globals():
+    global API_BASE_URL, EMBEDDING_API_BASE, API_KEY, CHAT_ENDPOINT
+    global EMBEDDINGS_ENDPOINT, MODELS_ENDPOINT, MAX_RETRIES, _batch_embedding_client
+    if API_BASE_URL is not None:
+        return
+    cfg = _get_lazy_config()
+    API_BASE_URL = cfg["API_BASE_URL"]
+    EMBEDDING_API_BASE = cfg["EMBEDDING_API_BASE"]
+    API_KEY = cfg["API_KEY"]
+    CHAT_ENDPOINT = cfg["CHAT_ENDPOINT"]
+    EMBEDDINGS_ENDPOINT = cfg["EMBEDDINGS_ENDPOINT"]
+    MODELS_ENDPOINT = cfg["MODELS_ENDPOINT"]
+    MAX_RETRIES = cfg["MAX_RETRIES"]
+    _batch_embedding_client = cfg["_batch_embedding_client"]
 
 # ── Pre-flight health checks ───────────────────────────────────────────────────
 def _check_health() -> bool:
@@ -64,23 +95,18 @@ def _check_health() -> bool:
         logger.error(f"[Health] API UNREACHABLE: {e}")
         all_ok = False
 
-    # Check embedding endpoint with a real embedding call
+    # Check embedding endpoint via BatchEmbeddingClient (goes through circuit breaker)
     try:
-        emb_model = get_env_or_config('EMBEDDING_MODEL', 'embedding.model', 'text-embedding-3-large')
-        expected_dim = get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072)
-        emb_url = EMBEDDING_API_BASE.rstrip('/') + EMBEDDINGS_ENDPOINT
-        headers_emb = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {API_KEY}",
-        }
-        payload_emb = {"model": emb_model, "input": "health_check"}
-        resp_emb = requests.post(emb_url, headers=headers_emb, json=payload_emb, timeout=30)
-        resp_emb.raise_for_status()
-        emb_data = resp_emb.json()
-        emb_dim = len(emb_data['data'][0]['embedding'])
-        logger.info(f"[Health] Embedding server ({emb_url}): model={emb_model}, dim={emb_dim}")
-        if emb_dim != expected_dim:
-            logger.error(f"[Health] ❌ Embedding dim {emb_dim} != {expected_dim} - check embedding.expected_dim")
+        emb_result = _batch_embedding_client.generate_batch_embeddings(["health_check"])
+        if emb_result.success and emb_result.embeddings and len(emb_result.embeddings) == 1:
+            emb_dim = len(emb_result.embeddings[0])
+            expected_dim = get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072)
+            logger.info(f"[Health] Embedding server OK: model={_batch_embedding_client.model}, dim={emb_dim}")
+            if emb_dim != expected_dim:
+                logger.error(f"[Health] ❌ Embedding dim {emb_dim} != {expected_dim} - check embedding.expected_dim")
+                all_ok = False
+        else:
+            logger.error(f"[Health] Embedding server FAILED: {emb_result.error or 'unknown error'}")
             all_ok = False
     except Exception as e:
         logger.error(f"[Health] Embedding server UNREACHABLE: {e}")
@@ -187,6 +213,7 @@ def _validate_env():
         raise RuntimeError(f"缺少必要配置：{', '.join(missing)}")
 
 def phase_chunking(file_id, batch_file):
+    _init_lazy_globals()
     _validate_env()
     progress_file = os.path.join(
         get_env_or_config('SRT_OUTPUT_DIR', 'paths.output_dir', './output'),
@@ -252,6 +279,7 @@ def phase_chunking(file_id, batch_file):
 
 
 def phase_summarizing(file_id, batch_file):
+    _init_lazy_globals()
     output_dir = get_env_or_config('SRT_OUTPUT_DIR', 'paths.output_dir', './output')
     chunk_file = os.path.join(output_dir, f"{file_id}_chunks_input.json")
     summarized_fn = os.path.join(output_dir, f"{file_id}_chunks_output.json")
@@ -291,6 +319,7 @@ def _validate_summarized_results(file_id, summarized_data):
 
 
 def phase_embedding(file_id, batch_file):
+    _init_lazy_globals()
     output_dir = get_env_or_config('SRT_OUTPUT_DIR', 'paths.output_dir', './output')
     summarized_fn = os.path.join(output_dir, f"{file_id}_chunks_output.json")
     meta_file = os.path.join(output_dir, f"{file_id}_meta.json")
@@ -361,7 +390,9 @@ def phase_embedding(file_id, batch_file):
 
 
 def phase_db_inserting(file_id, batch_file):
+    _init_lazy_globals()
     output_dir = get_env_or_config('SRT_OUTPUT_DIR', 'paths.output_dir', './output')
+
     records_file = os.path.join(output_dir, f"{file_id}_records.json")
 
     if not os.path.exists(records_file):
@@ -374,7 +405,7 @@ def phase_db_inserting(file_id, batch_file):
         raise RuntimeError(f"[{file_id}] No records to write — all chunks failed or empty")
 
     from finalize import write_to_db
-    success, msg = write_to_db(records)
+    success, msg = write_to_db(records, allow_delete=True)
     if not success:
         raise RuntimeError(f"LanceDB write failed: {msg}")
     logger.info(f"[{file_id}] LanceDB write successful")

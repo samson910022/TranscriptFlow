@@ -2,8 +2,8 @@
   "_comment": "TranscriptFlow example configuration. Copy to scripts/config.json and adjust for your environment.",
   "api": {
     "_comment": "OpenAI-compatible API configuration. LiteLLM, OpenRouter, vLLM, Ollama-compatible servers, and OpenAI all fit this interface.",
+    "_key_warning": "Do NOT put your API key here. Set OPENAI_API_KEY or LITELLM_PROXY_KEY in your environment instead.",
     "base_url": "https://api.openai.com",
-    "api_key": "",
     "chat_completions_path": "/v1/chat/completions",
     "embeddings_path": "/v1/embeddings",
     "models_path": "/v1/models",

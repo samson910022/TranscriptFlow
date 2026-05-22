@@ -1,4 +1,3 @@
-import requests
 #!/usr/bin/env python3
 """
 批次向量化模組 (Batch Embedding)
@@ -20,10 +19,12 @@ import json
 import time
 import hashlib
 import asyncio
+import threading
 from typing import List, Dict, Optional, Tuple, Union
 from dataclasses import dataclass
 from datetime import datetime
 import numpy as np
+import requests
 
 # Local imports
 sys.path.insert(0, os.path.dirname(__file__))
@@ -37,7 +38,12 @@ from circuit_breaker import (
 )
 
 logger = get_logger('batch_embedding')
-_session = requests.Session()
+_session = threading.local()
+
+def _get_session() -> requests.Session:
+    if not hasattr(_session, "s"):
+        _session.s = requests.Session()
+    return _session.s
 
 
 @dataclass
@@ -123,8 +129,8 @@ class BatchEmbeddingClient:
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {self.api_key}'
             }
-            resp = _session.post(url, json={"model": self.model, "input": texts},
-                                 headers=headers, timeout=self.timeout)
+            resp = _get_session().post(url, json={"model": self.model, "input": texts},
+                                             headers=headers, timeout=self.timeout)
             resp.raise_for_status()
             result = resp.json()
             embeddings = []

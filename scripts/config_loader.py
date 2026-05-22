@@ -9,8 +9,14 @@
 import os
 import json
 import re
+import ipaddress
+import socket
 from pathlib import Path
 from typing import Any, Optional, List
+from pydantic import BaseModel, Field, field_validator
+
+from dotenv import load_dotenv
+load_dotenv()
 
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -124,48 +130,106 @@ def get_nested_config(path: str, default: Any = None) -> Any:
     return val if val is not None else default
 
 
+class ApiConfigSchema(BaseModel):
+    base_url: str = Field(default="https://api.openai.com")
+    chat_completions_path: str = "/v1/chat/completions"
+    embeddings_path: str = "/v1/embeddings"
+    models_path: str = "/v1/models"
+    api_timeout: int = Field(default=60, ge=1, le=300)
+
+class ChunkingSchema(BaseModel):
+    smart_merge_window_size: int = Field(default=5, ge=1, le=20)
+    smart_merge_strong_pct: float = Field(default=0.02, ge=0.0, le=1.0)
+    smart_merge_weak_pct: float = Field(default=0.05, ge=0.0, le=1.0)
+    smart_merge_min_sentences: int = Field(default=8, ge=1)
+    smart_merge_noise_drop_len: int = Field(default=2, ge=0)
+    smart_merge_noise_weak_len: int = Field(default=3, ge=0)
+    min_chunks: int = Field(default=2, ge=1)
+    max_chunks: int = Field(default=200, ge=1)
+
+    @field_validator("max_chunks")
+    @classmethod
+    def max_gte_min(cls, v, info):
+        data = info.data
+        if "min_chunks" in data and v < data["min_chunks"]:
+            raise ValueError(f"max_chunks ({v}) < min_chunks ({data['min_chunks']})")
+        return v
+
+class EmbeddingSchema(BaseModel):
+    model: str = "text-embedding-3-large"
+    expected_dim: int = Field(default=3072, gt=0)
+    batch_max_size: int = Field(default=64, ge=1, le=256)
+    timeout: int = Field(default=60, ge=1)
+
+class PathsSchema(BaseModel):
+    output_dir: str = "./output"
+    db_path: str = "./lancedb"
+    master_file: str = "./examples/master_file_manifest.example.json"
+    data_dir: str = "./examples/srt"
+    backup_dir: str = "./output/lance_backup"
+
+class SummarizationSchema(BaseModel):
+    models: List[str] = ["gpt-4.1-mini"]
+    participant_chunks: int = Field(default=3, ge=1)
+    max_retries: int = Field(default=3, ge=0)
+    concurrency: int = Field(default=5, ge=1, le=50)
+    timeout_sec: int = Field(default=120, ge=1)
+
+class ConfigSchema(BaseModel):
+    api: ApiConfigSchema
+    chunking: ChunkingSchema = ChunkingSchema()
+    embedding: EmbeddingSchema = EmbeddingSchema()
+    paths: PathsSchema = PathsSchema()
+    summarization: SummarizationSchema = SummarizationSchema()
+
+
 def validate_config() -> list:
     """
     驗證配置參數的合理性
-    
+
     Returns:
         錯誤訊息清單（無錯誤時為空清單）
     """
     errors = []
     config = get_config()
-    
-    # 驗證 chunking 參數
+
+    # Pydantic schema validation
+    try:
+        ConfigSchema(**config)
+    except Exception as e:
+        errors.append(f"結構驗證失敗: {e}")
+
+    # 驗證 chunking 參數 (legacy)
     window_size = config.get('chunking', {}).get('smart_merge_window_size', 5)
     if not (1 <= window_size <= 20):
         errors.append(f"smart_merge_window_size 必須介於 1~20，當前值：{window_size}")
-    
+
     max_duration = config.get('chunking', {}).get('max_chunk_duration_sec', 300)
     if max_duration < 30:
         errors.append(f"max_chunk_duration_sec 必須 >= 30，當前值：{max_duration}")
-    
+
     min_chunks_val = config.get('chunking', {}).get('min_chunks', 2)
     if min_chunks_val < 1:
         errors.append(f"min_chunks 必須 >= 1，當前值：{min_chunks_val}")
-    
+
     max_chunks_val = config.get('chunking', {}).get('max_chunks', 200)
     if max_chunks_val < min_chunks_val:
         errors.append(f"max_chunks ({max_chunks_val}) 必須 >= min_chunks ({min_chunks_val})")
-    
+
     # 驗證 embedding 參數
     embed_dim = config.get('embedding', {}).get('expected_dim', 3072)
     if embed_dim <= 0:
         errors.append(f"expected_dim 必須 > 0，當前值：{embed_dim}")
-    
+
     # 驗證 summarization 參數
     participant_chunks_val = config.get('summarization', {}).get('participant_chunks', 3)
     if participant_chunks_val < 1:
         errors.append(f"participant_chunks 必須 >= 1，當前值：{participant_chunks_val}")
-    
+
     max_retries_val = config.get('summarization', {}).get('max_retries', 3)
     if max_retries_val < 0:
         errors.append(f"max_retries 必須 >= 0，當前值：{max_retries_val}")
-    
-    # 驗證路徑參數
+
     return errors
 
 
@@ -202,83 +266,46 @@ def validate_path(path: str, allowed_base: str = None) -> tuple[bool, str]:
 def sanitize_api_url(url: str) -> tuple[bool, str]:
     """
     驗證 API URL 的安全性
-    
+
     策略：
     1. 允許 HTTPS 連接（最安全）
-    2. 允許 HTTP 連接，但僅限於受信任的內部網路（Localhost, Private IP）
-    3. 阻止 HTTP 連接至公网 IP（防止數據洩漏到未加密的外部網路）
-    
+    2. 允許 HTTP 連接，但僅限於受信任的內部網路（使用 ipaddress 模組判斷）
+
     Args:
         url: API URL
-    
+
     Returns:
         (是否合法, 訊息)
     """
     if not url:
         return False, "URL 為空"
-    
+
     # 允許 HTTPS，無需檢查
     if url.startswith('https://'):
         return True, "URL 合法 (HTTPS)"
-    
+
     # 僅處理 HTTP 連接
     if url.startswith('http://'):
-        # 檢查是否強制允許 HTTP（開發模式）
         allow_insecure = os.getenv('ALLOW_INSECURE_HTTP', '').lower() in ('1', 'true', 'yes')
-        
+
         if allow_insecure:
-            logger.warning("⚠️ 注意：ALLOW_INSECURE_HTTP 已啟用，允許所有 HTTP 連接（僅限開發測試）")
+            logger.warning("ALLOW_INSECURE_HTTP 已啟用，允許所有 HTTP 連接（僅限開發測試）")
             return True, "URL 合法 (強制允許 HTTP)"
-        
-        # 解析主機名/IP
+
         try:
-            # 提取主機部分 (去掉 port)
             host_part = url.split('http://')[1].split('/')[0].split(':')[0]
-            
-            # 檢查是否為內部網路 IP 或 localhost
-            is_internal = (
-                host_part == 'localhost' or
-                host_part == '127.0.0.1' or
-                host_part.startswith('10.') or                  # Class A Private
-                host_part.startswith('172.16.') or              # Class B Private (172.16-31)
-                host_part.startswith('172.17.') or
-                host_part.startswith('172.18.') or
-                host_part.startswith('172.19.') or
-                host_part.startswith('172.20.') or
-                host_part.startswith('172.21.') or
-                host_part.startswith('172.22.') or
-                host_part.startswith('172.23.') or
-                host_part.startswith('172.24.') or
-                host_part.startswith('172.25.') or
-                host_part.startswith('172.26.') or
-                host_part.startswith('172.27.') or
-                host_part.startswith('172.28.') or
-                host_part.startswith('172.29.') or
-                host_part.startswith('172.30.') or
-                host_part.startswith('172.31.') or
-                host_part.startswith('192.168.') or             # Class C Private
-                host_part.startswith('169.254.') or             # Link-local
-                host_part.startswith('100.64.')                 # Carrier-grade NAT (通常也是內部)
-            )
-            
-            if is_internal:
-                return True, f"URL 合法 (內部網路 HTTP: {host_part})"
-            else:
-                # 嘗試解析 DNS 以確認是否為內部 IP（防偽裝）
-                import socket
-                try:
-                    ip = socket.gethostbyname(host_part)
-                    # 再次檢查解析後的 IP 是否為內部
-                    if (ip.startswith('10.') or ip.startswith('172.') or 
-                        ip.startswith('192.168.') or ip.startswith('127.')):
-                        return True, f"URL 合法 (DNS 解析為內部 IP: {ip})"
-                except Exception:
-                    pass  # DNS 解析失敗，繼續檢查原始 host_part
-                
-                return False, f"❌ 安全阻止：HTTP 連接至外部網路 ({host_part}) 不被允許。請使用 HTTPS 或確認這是內部 IP。"
+            if host_part in ('localhost', '127.0.0.1', '::1'):
+                return True, f"URL 合法 (localhost: {host_part})"
+            try:
+                ip = socket.gethostbyname(host_part)
+                if ipaddress.ip_address(ip).is_private:
+                    return True, f"URL 合法 (內部網路 IP: {ip})"
+            except Exception:
+                pass
+            return False, f"安全阻止：HTTP 連接至外部網路 ({host_part})。請使用 HTTPS。"
         except Exception as e:
             return False, f"URL 解析失敗: {e}"
-    
+
     return False, f"不支持的協議: {url.split(':')[0]}"
 
 # 增加一個日誌 helper，避免循環引用

@@ -45,8 +45,10 @@ class SensitiveDataFilter(logging.Filter):
     
     def filter(self, record):
         """過濾敏感資訊"""
-        # 更新過濾列表（確保最新）
+        # 更新過濾列表（確保最新；僅保留最近 5 個 pattern，避免舊 key 累積）
         self._update_patterns()
+        if len(self.sensitive_patterns) > 5:
+            self.sensitive_patterns = self.sensitive_patterns[-5:]
         
         # 過濾訊息
         if record.msg:
@@ -71,6 +73,19 @@ class SensitiveDataFilter(logging.Filter):
                     else:
                         new_args.append(arg)
                 record.args = tuple(new_args)
+        
+        # 過濾 exc_info / exc_text（traceback 可能包含 key 片段）
+        if record.exc_info and record.exc_info[1]:
+            try:
+                msg = str(record.exc_info[1])
+                for pattern in self.sensitive_patterns:
+                    msg = pattern.sub('***REDACTED***', msg)
+                record.exc_info = (record.exc_info[0], type(record.exc_info[1])(msg), record.exc_info[2])
+            except Exception:
+                pass
+        if record.exc_text:
+            for pattern in self.sensitive_patterns:
+                record.exc_text = pattern.sub('***REDACTED***', record.exc_text)
         
         return True
 

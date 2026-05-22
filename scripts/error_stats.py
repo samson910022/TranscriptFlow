@@ -94,15 +94,16 @@ def analyze_batch_status():
     done_count = status_counts.get('done', 0)
     success_rate = (done_count / total_files * 100) if total_files > 0 else 0
     
-    # 建立報告
+    # 建立報告（過濾零計數項目）
+    filtered_status = {k: v for k, v in status_counts.items() if v > 0}
     report = {
         'generated_at': datetime.now().isoformat(),
         'total_files_processed': total_files,
         'batch_files_analyzed': len(files),
-        'status_distribution': dict(status_counts),
+        'status_distribution': filtered_status,
         'success_rate': f"{success_rate:.2f}%",
         'top_error_patterns': dict(error_patterns.most_common(10)),
-        'summary': dict(status_counts)
+        'summary': filtered_status
     }
     
     # 寫入報告檔案

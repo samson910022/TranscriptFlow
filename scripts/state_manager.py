@@ -90,11 +90,30 @@ def load_status(file_id=None):
 def save_status(data):
     path = get_status_path()
     dir_path = os.path.dirname(path) or '.'
-    with tempfile.NamedTemporaryFile(mode='w', dir=dir_path, delete=False,
-                                     prefix='.status_tmp_', suffix='.json') as tf:
-        tmp_path = tf.name
-        json.dump(data, tf, indent=2, ensure_ascii=False)
-    os.replace(tmp_path, path)
+    lock_path = path + '.lock'
+    lock_f = None
+    tmp_path = None
+    try:
+        lock_f = open(lock_path, 'w')
+        fcntl.flock(lock_f, fcntl.LOCK_EX)
+        with tempfile.NamedTemporaryFile(mode='w', dir=dir_path, delete=False,
+                                         prefix='.status_tmp_', suffix='.json') as tf:
+            tmp_path = tf.name
+            json.dump(data, tf, indent=2, ensure_ascii=False)
+            tf.flush()
+            os.fsync(tf.fileno())
+        os.replace(tmp_path, path)
+        tmp_path = None
+    finally:
+        if lock_f is not None:
+            fcntl.flock(lock_f, fcntl.LOCK_UN)
+            lock_f.close()
+        if tmp_path is not None:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
 
 # ── 相位並發控制 ──────────────────────────────────────────────────────────
 _PHASE_SLOTS_FILE = None
@@ -167,13 +186,52 @@ def acquire_phase_slot(file_id, phase):
     concurrency = _get_phase_concurrency()
     max_slots = concurrency.get(phase, 1)
     path = _get_phase_slots_file()
-    return _atomic_update_phase_slots(path, lambda slots:
-        {**slots, phase: slots.get(phase, 0) + 1} if slots.get(phase, 0) < max_slots else False)
+    _acquired = [False]
+    def _acquire(slots):
+        phase_data = slots.get(phase, {"slots": [], "queue": []})
+        if file_id in phase_data.get("slots", []):
+            _acquired[0] = True
+            return slots
+        if len(phase_data.get("slots", [])) < max_slots:
+            phase_data.setdefault("slots", []).append(file_id)
+            slots[phase] = phase_data
+            _acquired[0] = True
+            return slots
+        queue = phase_data.setdefault("queue", [])
+        if file_id not in queue:
+            queue.append(file_id)
+        slots[phase] = phase_data
+        return slots
+    _atomic_update_phase_slots(path, _acquire)
+    return _acquired[0]
 
 def release_phase_slot(phase):
     path = _get_phase_slots_file()
-    _atomic_update_phase_slots(path, lambda slots:
-        {**slots, phase: max(0, slots.get(phase, 0) - 1)})
+    def _release(slots):
+        phase_data = slots.get(phase, {"slots": [], "queue": []})
+        return slots
+    _atomic_update_phase_slots(path, _release)
+
+def release_file_phase_slot(file_id, phase):
+    path = _get_phase_slots_file()
+    def _release(slots):
+        phase_data = slots.get(phase, {"slots": [], "queue": []})
+        slots_list = phase_data.get("slots", [])
+        queue = phase_data.get("queue", [])
+        if file_id in slots_list:
+            slots_list.remove(file_id)
+            if queue:
+                next_file = queue.pop(0)
+                slots_list.append(next_file)
+            phase_data["slots"] = slots_list
+            phase_data["queue"] = queue
+            slots[phase] = phase_data
+        elif file_id in queue:
+            queue.remove(file_id)
+            phase_data["queue"] = queue
+            slots[phase] = phase_data
+        return slots
+    return _atomic_update_phase_slots(path, _release)
 
 # 基礎路徑配置
 # 從 config_loader 讀取路徑配置
