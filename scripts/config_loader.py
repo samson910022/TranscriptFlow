@@ -293,12 +293,13 @@ def sanitize_api_url(url: str) -> tuple[bool, str]:
             return True, "URL 合法 (強制允許 HTTP)"
 
         try:
-            host_part = url.split('http://')[1].split('/')[0].split(':')[0]
+            host_part = url.split('http://')[1].split('/')[0].split(':')[0].strip('[]')
             if host_part in ('localhost', '127.0.0.1', '::1'):
                 return True, f"URL 合法 (localhost: {host_part})"
             try:
                 ip = socket.gethostbyname(host_part)
-                if ipaddress.ip_address(ip).is_private:
+                addr = ipaddress.ip_address(ip)
+                if addr.is_private or addr in ipaddress.ip_network('100.64.0.0/10'):
                     return True, f"URL 合法 (內部網路 IP: {ip})"
             except Exception:
                 pass

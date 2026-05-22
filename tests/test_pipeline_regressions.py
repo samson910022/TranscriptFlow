@@ -189,13 +189,13 @@ def test_checkpoint_resume_ignores_stale_text_hash(monkeypatch, tmp_path):
 
 def test_finalize_write_to_db_uses_chunk_id_upsert(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SRT_DB_PATH", str(tmp_path / "db"))
+    monkeypatch.setenv("SRT_TABLE_NAME", "test_table")
+    monkeypatch.setenv("EMBEDDING_EXPECTED_DIM", "3")
     import finalize
     import lancedb
 
     finalize = importlib.reload(finalize)
-    monkeypatch.setattr(finalize, "DB_FINAL", str(tmp_path / "db"))
-    monkeypatch.setattr(finalize, "TABLE_NAME", "test_table")
-    monkeypatch.setattr(finalize, "EXPECTED_DIM", 3)
 
     base = {
         "chunk_id": "1_0",
