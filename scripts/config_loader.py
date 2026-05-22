@@ -94,13 +94,12 @@ def _convert_value(str_val: str, default: Any) -> Any:
         except ValueError:
             return default
     elif isinstance(default, list):
-        # 對於列表，嘗試解析 JSON
         try:
             parsed = json.loads(str_val)
             if isinstance(parsed, list):
                 return parsed
         except json.JSONDecodeError:
-            pass
+            logger.warning(f"無法解析為 JSON 列表 (value={str_val!r})，使用預設值")
         return default
     else:
         return str_val

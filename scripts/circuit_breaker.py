@@ -20,6 +20,10 @@ import logging
 logger = logging.getLogger('circuit_breaker')
 
 
+class CircuitBreakerOpenError(Exception):
+    """Circuit breaker 斷開時拋出的例外"""
+
+
 class CircuitState(Enum):
     """電路斷開器狀態"""
     CLOSED = "closed"      # 正常運作
@@ -197,12 +201,10 @@ class CircuitBreaker:
                 logger.error(f"🚨 達到失敗閾值 ({self.failure_count})，電路斷開!")
     
     def _invoke_fallback(self, func: Callable, *args, **kwargs) -> Any:
-        """觸發 fallback 機制"""
-        logger.info("🔁 啟用 fallback 機制")
+        """觸發 fallback 機制 — 拋出例外，不回傳假資料"""
+        logger.info("Circuit breaker OPEN，觸發 fallback")
         self.metrics.retried_calls += 1
-        # Fallback: 返回預設值或使用备用邏輯
-        # 這裡簡單記錄並返回 None，實際應用應根據業務邏輯調整
-        return None
+        raise CircuitBreakerOpenError("Circuit breaker is OPEN")
     
     def get_status(self) -> dict:
         """獲取當前狀態"""

@@ -134,8 +134,23 @@ def generate_embedding(text: str, expected_dim: Optional[int] = None) -> Optiona
         logger.error(f"Embedding request failed for text snippet '{text[:30]}...': {e}")
         return None
 
-def _embed_windows(windows: List[str]) -> tuple[List, List[int]]:
+def _embed_windows(windows: List[str], embed_fn=None) -> tuple[List, List[int]]:
     """向量化所有窗口，回傳 (vectors, failed_indices)。"""
+    if embed_fn:
+        vectors = []
+        failed = []
+        for i, w in enumerate(windows):
+            try:
+                vec = embed_fn(w)
+                if vec is not None:
+                    vectors.append(vec)
+                else:
+                    vectors.append(None)
+                    failed.append(i)
+            except Exception:
+                vectors.append(None)
+                failed.append(i)
+        return vectors, failed
     _ensure_client()
     batch_size = get_env_or_config('BATCH_EMBEDDING_MAX_SIZE', 'embedding.batch_max_size', 32)
     vectors = [None] * len(windows)
@@ -283,7 +298,8 @@ def smart_merge_3_0(entries: List[SubtitleEntry], file_id: int,
                     high_pct: float = SMART_MERGE_WEAK_PCT,
                     low_pct: float = SMART_MERGE_STRONG_PCT,
                     noise_drop_len: int = SMART_MERGE_NOISE_DROP_LEN,
-                    noise_weak_len: int = SMART_MERGE_NOISE_WEAK_LEN) -> tuple[List[Dict], List[int], List[Dict]]:
+                    noise_weak_len: int = SMART_MERGE_NOISE_WEAK_LEN,
+                    embed_fn=None) -> tuple[List[Dict], List[int], List[Dict]]:
     total_entries = len(entries)
     if total_entries < window_size:
         return [{'start_idx': 0, 'end_idx': total_entries - 1,
@@ -298,7 +314,7 @@ def smart_merge_3_0(entries: List[SubtitleEntry], file_id: int,
     windows = [' '.join(e.text for e in entries[i:i + window_size])
                for i in range(total_entries - window_size + 1)]
 
-    vectors, failed_windows = _embed_windows(windows)
+    vectors, failed_windows = _embed_windows(windows, embed_fn=embed_fn)
 
     valid_count = sum(1 for v in vectors if v is not None)
     if valid_count < MIN_VALID_VECTORS:
@@ -338,19 +354,12 @@ def semantic_chunk(entries: List[SubtitleEntry], file_id: int, threshold: Union[
         logger.info("輸入條目為空，返回空列表")
         return []
     total_entries = len(entries)
-    logger.info(f"🚀 開始執行 Smart Merge 3.0：共 {total_entries} 筆")
+    logger.info(f"開始執行 Smart Merge 3.0：共 {total_entries} 筆")
 
-    # 載入進度（如果有）
-    progress_data = _load_progress(file_id)
-    start_index = progress_data.get('completed_count', 0) if progress_data else 0
-    current_entries = entries[start_index:]
-    if not current_entries:
-        logger.info("所有條目已處理完畢")
-        return []
-
-    # 執行 Smart Merge 3.0
+    # 執行 Smart Merge 3.0（chunking 速度很快，不做 progress resume）
+    # 若需 resume，請於 LLM-heavy summarization 階段實作 content-addressed checkpoint
     final_chunks, failed_indices, discarded_chunks = smart_merge_3_0(
-        entries=current_entries,
+        entries=entries,
         file_id=file_id,
         window_size=SMART_MERGE_WINDOW_SIZE,
         min_sentences=SMART_MERGE_MIN_SENTENCES,
@@ -373,8 +382,6 @@ def semantic_chunk(entries: List[SubtitleEntry], file_id: int, threshold: Union[
     if not final_chunks:
         raise RuntimeError("Smart Merge 失敗：產出 0 個 chunks。請檢查 SRT 內容或調整相似度閾值。")
 
-    # 更新進度
-    _mark_progress_complete(file_id, total_entries, len(final_chunks), len(failed_indices))  # chunk_count, failed_windows
     if discarded_chunks:
         logger.info(f"Smart Merge excluded {len(discarded_chunks)} noise chunks")
     logger.info(f"✅ Smart Merge 成功：產出 {len(final_chunks)} 個語意段落")
