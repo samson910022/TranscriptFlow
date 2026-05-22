@@ -12,12 +12,6 @@ class SubtitleEntry:
     end_time: str
     text: str
 
-def _time_to_seconds(t: str) -> float:
-    # t: HH:MM:SS,mmm  (comma as ms)
-    h, m, s_ms = t.split(':')
-    s, ms = s_ms.split(',')
-    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
-
 def parse_srt(path: str) -> List[SubtitleEntry]:
     if not os.path.exists(path):
         raise FileNotFoundError(f"SRT file not found: {path}")
