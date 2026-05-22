@@ -202,36 +202,6 @@ def validate_config() -> list:
     return errors
 
 
-def validate_path(path: str, allowed_base: str = None) -> tuple[bool, str]:
-    """
-    驗證路徑是否合法，防止路徑穿越攻擊
-    
-    Args:
-        path: 要驗證的路徑
-        allowed_base: 允許的基础目录（可选）
-    
-    Returns:
-        (是否合法, 訊息)
-    """
-    if not path:
-        return False, "路徑為空"
-    
-    try:
-        real_path = os.path.realpath(path)
-        
-        # 檢查是否包含 .. 等危險路徑元件
-        if '..' in path.split(os.sep):
-            # 允許 .. 但需要檢查解析後的實際位置
-            if allowed_base:
-                real_base = os.path.realpath(allowed_base)
-                if not real_path.startswith(real_base + os.sep) and real_path != real_base:
-                    return False, f"路徑 {path} 超出允許範圍 {allowed_base}"
-        
-        return True, "路徑合法"
-    except Exception as e:
-        return False, f"路徑驗證失敗: {e}"
-
-
 def sanitize_api_url(url: str) -> tuple[bool, str]:
     """
     驗證 API URL 的安全性

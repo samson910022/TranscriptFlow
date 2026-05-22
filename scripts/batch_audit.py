@@ -820,13 +820,13 @@ def main():
     if not args.report_only:
         _print_terminal_report(summary, all_issues, file_details, args.verbose)
 
-    # Exit code based on score
+    # Exit code based on score (10 = minor issues, 20 = critical issues)
     if summary['overall_score'] >= 90:
         sys.exit(0)
     elif summary['overall_score'] >= 70:
-        sys.exit(1)
+        sys.exit(10)
     else:
-        sys.exit(2)
+        sys.exit(20)
 
 
 if __name__ == '__main__':

@@ -72,6 +72,15 @@ def _locked_read_write(operation_func):
     raise RuntimeError(f"無法取得檔案鎖定（逾時）: {path}")
 
 def load_status(file_id=None):
+    """
+    Read status file without acquiring the sidecar lock.
+
+    Safety note: On most POSIX filesystems, `os.replace()` (used by
+    `_locked_read_write`) is atomic — the old inode stays valid until the
+    last fd is closed, so a concurrent read may see stale data but never
+    a torn/incomplete write. If strict read-own-write consistency is
+    required, readers should also acquire the sidecar lock.
+    """
     path = get_status_path()
     if not os.path.exists(path):
         return []
@@ -297,7 +306,7 @@ def init_batch(start_idx, end_idx):
             "chunks": []
         })
 
-    save_status(status_data)
+    _locked_read_write(lambda _: status_data)
     print(f"Initialized {len(status_data)} files in {STATUS_FILE}. "
           f"Pre-flight checked: {len([x for x in status_data if x['status'] == 'failed_permanent'])} failed permanently.")
 

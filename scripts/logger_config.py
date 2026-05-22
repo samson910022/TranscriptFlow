@@ -17,11 +17,10 @@ class SensitiveDataFilter(logging.Filter):
     def __init__(self):
         super().__init__()
         self.sensitive_patterns = []
-        self._update_patterns()
+        self._init_patterns()
     
-    def _update_patterns(self):
-        """更新敏感資訊過濾列表"""
-        # 優先從 config.json 讀取 API Key
+    def _init_patterns(self):
+        """初始化時讀取 API Key（只執行一次）"""
         api_key = None
         try:
             import json
@@ -33,20 +32,14 @@ class SensitiveDataFilter(logging.Filter):
                 api_key = cfg.get('api', {}).get('api_key', '')
         except Exception:
             pass
-        # Fallback 到環境變數
         if not api_key:
             api_key = os.getenv('OPENAI_API_KEY') or os.getenv('LITELLM_PROXY_KEY', '')
         if api_key:
             esc = re.escape(api_key)
-            if not any(p.pattern == esc for p in self.sensitive_patterns):
-                self.sensitive_patterns.append(re.compile(esc, re.IGNORECASE))
-        
-        # 其他可能的敏感資訊（可擴展）
+            self.sensitive_patterns.append(re.compile(esc, re.IGNORECASE))
     
     def filter(self, record):
         """過濾敏感資訊"""
-        # 更新過濾列表（確保最新；僅保留最近 5 個 pattern，避免舊 key 累積）
-        self._update_patterns()
         if len(self.sensitive_patterns) > 5:
             self.sensitive_patterns = self.sensitive_patterns[-5:]
         

@@ -16,7 +16,7 @@ import lancedb
 # Local imports
 from state_manager import update_state, set_status_file
 from logger_config import get_logger
-from config_loader import get_env_or_config, validate_config, check_required_env_vars, sanitize_api_url, ensure_secure_permissions, validate_path
+from config_loader import get_env_or_config, validate_config, check_required_env_vars, sanitize_api_url, ensure_secure_permissions
 
 logger = get_logger('finalize')
 

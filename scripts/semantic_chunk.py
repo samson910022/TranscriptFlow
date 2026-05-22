@@ -44,7 +44,7 @@ def _parse_timestamp(ts: str) -> float:
 
 
 
-def _load_progress(file_id: int):
+def _load_progress(file_id: int) -> Optional[dict]:
     """Load progress from file if exists."""
     os.makedirs(PROGRESS_DIR, exist_ok=True)
     progress_file = os.path.join(PROGRESS_DIR, f'embedding_progress_{file_id}.json')
