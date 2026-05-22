@@ -11,13 +11,12 @@ import tempfile
 from parse_srt import parse_srt, SubtitleEntry
 from logger_config import get_logger
 from config_loader import get_env_or_config, validate_config, check_required_env_vars, get_api_config
-from batch_embedding import BatchEmbeddingClient
+from llm_client import get_embedding_client
 
 logger = get_logger('semantic_chunk')
 
 # L2: 延遲初始化 — 從 config_loader 取值的變數延後到函數內初始化
 # 以下變數在 semantic_chunk() 首次呼叫時才設定
-_batch_embedding_client = None
 
 # ── Chunking parameters (from config) ─────────────────────────────────────────────
 SMART_MERGE_WINDOW_SIZE = get_env_or_config('SMART_MERGE_WINDOW_SIZE', 'chunking.smart_merge_window_size', 5)
@@ -96,17 +95,7 @@ def _mark_progress_complete(file_id: int, total_count: int, valid_count: int, fa
         logger.error(f"完成標記儲存失敗：{e}")
 
 def _ensure_client():
-    """L2: 延遲初始化 BatchEmbeddingClient，避免模組頂層副作用"""
-    global _batch_embedding_client
-    if _batch_embedding_client is None:
-        _api_cfg = get_api_config()
-        _batch_embedding_client = BatchEmbeddingClient(
-            api_base=_api_cfg['embedding_url'],
-            api_key=_api_cfg['api_key'],
-            model=get_env_or_config('EMBEDDING_MODEL', 'embedding.model', 'text-embedding-3-large'),
-            timeout=get_env_or_config('EMBEDDING_TIMEOUT', 'embedding.timeout', 60),
-            expected_dim=get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072),
-        )
+    return get_embedding_client()
 
 
 def _get_expected_dim() -> int:
@@ -115,12 +104,11 @@ def _get_expected_dim() -> int:
 
 def generate_embedding(text: str, expected_dim: Optional[int] = None) -> Optional[np.ndarray]:
     """Query the OpenAI-compatible embedding endpoint for a single vector."""
-    # H1+H3: 使用統一的 BatchEmbeddingClient
-    _ensure_client()
+    client = get_embedding_client()
     if expected_dim is None:
         expected_dim = _get_expected_dim()
     try:
-        embeddings = _batch_embedding_client.generate_batch_embeddings([text])
+        embeddings = client.generate_batch_embeddings([text])
         if embeddings.success and embeddings.embeddings and len(embeddings.embeddings) == 1:
             emb = embeddings.embeddings[0]
             if len(emb) != expected_dim:
@@ -151,7 +139,7 @@ def _embed_windows(windows: List[str], embed_fn=None) -> tuple[List, List[int]]:
                 vectors.append(None)
                 failed.append(i)
         return vectors, failed
-    _ensure_client()
+    client = get_embedding_client()
     batch_size = get_env_or_config('BATCH_EMBEDDING_MAX_SIZE', 'embedding.batch_max_size', 32)
     vectors = [None] * len(windows)
     failed_windows = []
@@ -159,7 +147,7 @@ def _embed_windows(windows: List[str], embed_fn=None) -> tuple[List, List[int]]:
     def _process_batch(indices, current_batch_size):
         texts = [windows[i] for i in indices]
         try:
-            res = _batch_embedding_client.generate_batch_embeddings(texts)
+            res = client.generate_batch_embeddings(texts)
             if res.success and res.embeddings:
                 for i, vec in zip(indices, res.embeddings):
                     vectors[i] = vec

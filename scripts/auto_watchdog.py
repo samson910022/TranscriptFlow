@@ -70,7 +70,7 @@ def _reset_phase_slots():
     import json, fcntl, tempfile, os
     data_path = _get_phase_slots_file()
     lock_path = _get_phase_slots_lock_file()
-    base = {"phase1_chunking": 0, "phase2_summarizing": 0, "phase3_embedding": 0, "phase4_db_insert": 0}
+    base = {"phase1_chunking": {"slots": [], "queue": []}, "phase2_summarizing": {"slots": [], "queue": []}, "phase3_embedding": {"slots": [], "queue": []}, "phase4_db_insert": {"slots": [], "queue": []}}
     try:
         with open(lock_path, 'w') as lf:
             fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)

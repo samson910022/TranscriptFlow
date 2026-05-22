@@ -145,6 +145,7 @@ class ChunkingSchema(BaseModel):
     smart_merge_noise_weak_len: int = Field(default=3, ge=0)
     min_chunks: int = Field(default=2, ge=1)
     max_chunks: int = Field(default=200, ge=1)
+    max_chunk_duration_sec: int = Field(default=300, ge=30)
 
     @field_validator("max_chunks")
     @classmethod
@@ -197,37 +198,6 @@ def validate_config() -> list:
         ConfigSchema(**config)
     except Exception as e:
         errors.append(f"結構驗證失敗: {e}")
-
-    # 驗證 chunking 參數 (legacy)
-    window_size = config.get('chunking', {}).get('smart_merge_window_size', 5)
-    if not (1 <= window_size <= 20):
-        errors.append(f"smart_merge_window_size 必須介於 1~20，當前值：{window_size}")
-
-    max_duration = config.get('chunking', {}).get('max_chunk_duration_sec', 300)
-    if max_duration < 30:
-        errors.append(f"max_chunk_duration_sec 必須 >= 30，當前值：{max_duration}")
-
-    min_chunks_val = config.get('chunking', {}).get('min_chunks', 2)
-    if min_chunks_val < 1:
-        errors.append(f"min_chunks 必須 >= 1，當前值：{min_chunks_val}")
-
-    max_chunks_val = config.get('chunking', {}).get('max_chunks', 200)
-    if max_chunks_val < min_chunks_val:
-        errors.append(f"max_chunks ({max_chunks_val}) 必須 >= min_chunks ({min_chunks_val})")
-
-    # 驗證 embedding 參數
-    embed_dim = config.get('embedding', {}).get('expected_dim', 3072)
-    if embed_dim <= 0:
-        errors.append(f"expected_dim 必須 > 0，當前值：{embed_dim}")
-
-    # 驗證 summarization 參數
-    participant_chunks_val = config.get('summarization', {}).get('participant_chunks', 3)
-    if participant_chunks_val < 1:
-        errors.append(f"participant_chunks 必須 >= 1，當前值：{participant_chunks_val}")
-
-    max_retries_val = config.get('summarization', {}).get('max_retries', 3)
-    if max_retries_val < 0:
-        errors.append(f"max_retries 必須 >= 0，當前值：{max_retries_val}")
 
     return errors
 

@@ -15,7 +15,7 @@ from parse_srt import parse_srt, SubtitleEntry
 from semantic_chunk import semantic_chunk
 from logger_config import get_logger
 from config_loader import get_env_or_config, get_api_config
-from batch_embedding import BatchEmbeddingClient
+from llm_client import extract_participants, get_embedding_client
 from state_manager import update_state, load_status, set_status_file, _locked_read_write
 
 logger = get_logger('summarize')
@@ -41,13 +41,6 @@ def _get_lazy_config():
             "EMBEDDINGS_ENDPOINT": _api_cfg['embeddings_path'],
             "MODELS_ENDPOINT": _api_cfg['models_path'],
             "MAX_RETRIES": get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3),
-            "_batch_embedding_client": BatchEmbeddingClient(
-                api_base=_api_cfg['embedding_url'],
-                api_key=api_key,
-                model=get_env_or_config('EMBEDDING_MODEL', 'embedding.model', 'text-embedding-3-large'),
-                timeout=get_env_or_config('EMBEDDING_TIMEOUT', 'embedding.timeout', 60),
-                expected_dim=get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072),
-            ),
         }
     return _LAZY_CONFIG
 
@@ -59,11 +52,10 @@ CHAT_ENDPOINT = None
 EMBEDDINGS_ENDPOINT = None
 MODELS_ENDPOINT = None
 MAX_RETRIES = None
-_batch_embedding_client = None
 
 def _init_lazy_globals():
     global API_BASE_URL, EMBEDDING_API_BASE, API_KEY, CHAT_ENDPOINT
-    global EMBEDDINGS_ENDPOINT, MODELS_ENDPOINT, MAX_RETRIES, _batch_embedding_client
+    global EMBEDDINGS_ENDPOINT, MODELS_ENDPOINT, MAX_RETRIES
     if API_BASE_URL is not None:
         return
     cfg = _get_lazy_config()
@@ -74,7 +66,6 @@ def _init_lazy_globals():
     EMBEDDINGS_ENDPOINT = cfg["EMBEDDINGS_ENDPOINT"]
     MODELS_ENDPOINT = cfg["MODELS_ENDPOINT"]
     MAX_RETRIES = cfg["MAX_RETRIES"]
-    _batch_embedding_client = cfg["_batch_embedding_client"]
 
 # ── Pre-flight health checks ───────────────────────────────────────────────────
 def _check_health() -> bool:
@@ -96,12 +87,13 @@ def _check_health() -> bool:
         all_ok = False
 
     # Check embedding endpoint via BatchEmbeddingClient (goes through circuit breaker)
+    client = get_embedding_client()
     try:
-        emb_result = _batch_embedding_client.generate_batch_embeddings(["health_check"])
+        emb_result = client.generate_batch_embeddings(["health_check"])
         if emb_result.success and emb_result.embeddings and len(emb_result.embeddings) == 1:
             emb_dim = len(emb_result.embeddings[0])
             expected_dim = get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072)
-            logger.info(f"[Health] Embedding server OK: model={_batch_embedding_client.model}, dim={emb_dim}")
+            logger.info(f"[Health] Embedding server OK: model={client.model}, dim={emb_dim}")
             if emb_dim != expected_dim:
                 logger.error(f"[Health] ❌ Embedding dim {emb_dim} != {expected_dim} - check embedding.expected_dim")
                 all_ok = False
@@ -115,83 +107,12 @@ def _check_health() -> bool:
     return all_ok
 
 # ── Step 4: Participants ──────────────────────────────────────────────────────
-def extract_participants(chunks: List[Dict]) -> List[str]:
-    """
-    僅使用影片開頭的幾個 chunk 來提取參與者。
-    因為節目來賓介紹通常集中在開場,這樣可以減少 token 消耗並降低幻覺。
-    """
-    PARTICIPANT_CHUNKS = get_env_or_config('PARTICIPANT_CHUNKS', 'summarization.participant_chunks', 3)
-
-    # Take only the first N chunks
-    eligible = chunks[:PARTICIPANT_CHUNKS]
-    if not eligible:
-        logger.warning("No chunks available for participant extraction")
-        return []
-
-    # Use full text of opening chunks (program introductions are usually in the first ~2 min)
-    opening_text = '\n'.join(c['text_content'] for c in eligible)
-    total_chars = len(opening_text)
-    logger.info(f"Extracting participants from first {len(eligible)} chunks ({total_chars} chars)...")
-
-    prompt = (
-        "以下是一個影片開場字幕。請從對話中找出實際有在節目中發言的人（主持人、來賓）。"
-        "判斷依據：該人物有使用第一人稱發言、被主持人介紹為來賓、或參與對話輪替。"
-        "不要列出被討論但沒有實際發言的人物（例如書的作者、歷史人物、名人、專家等）。"
-        "只輸出實際參與對話的真實人名或常用暱稱。"
-        "用 JSON 格式回傳：\n"
-        '{"participants": ["名字 1", "名字 2", ...]}'
-        f"\n\n開場字幕：\n{opening_text}"
-    )
-
-    # 從 config.json 讀取模型清單(統一來源)
-    models = get_env_or_config('SUMMARIZATION_MODELS', 'summarization.models', [
-        "gpt-4.1-mini"
-    ])
-    logger.info(f"Using participant extraction models: {models[:3]}... (total {len(models)} models)")
-
-    for attempt in range(1, MAX_RETRIES + 1):
-        model = models[(attempt - 1) % len(models)]
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {API_KEY}",
-        }
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "你是一個影片分析助理,專門識別節目中的講者。"},
-                {"role": "user", "content": prompt},
-            ],
-            "timeout": 120,
-        }
-        try:
-            resp = requests.post(f"{API_BASE_URL.rstrip('/')}{CHAT_ENDPOINT}", headers=headers, json=payload, timeout=150)
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-            if content is None:
-                raise ValueError("LLM returned null content")
-            content = content.strip()
-            import re
-            m = re.search(r'\{[^{}]*\}', content, re.DOTALL)
-            if m:
-                data = json.loads(m.group())
-            else:
-                data = json.loads(content)
-            participants = data.get("participants", [])
-            logger.info(f"Participants extracted ({model}): {participants}")
-            return participants
-        except Exception as exc:
-            logger.warning(f"Participants extraction attempt {attempt} with {model}: {exc}")
-            if attempt < MAX_RETRIES:
-                time.sleep(2 ** attempt)  # backoff: 2s, 4s, 8s
-
-    logger.warning(f"All {MAX_RETRIES} participants extraction attempts failed")
-    return []
-
 def generate_embedding_local(text: str, expected_dim: int = None):
-    """Generate a single embedding vector using the unified BatchEmbeddingClient (H1+H3)."""
+    """Generate a single embedding vector using get_embedding_client()."""
+    client = get_embedding_client()
     expected_dim = expected_dim or get_env_or_config('EMBEDDING_EXPECTED_DIM', 'embedding.expected_dim', 3072)
     try:
-        embeddings = _batch_embedding_client.generate_batch_embeddings([text])
+        embeddings = client.generate_batch_embeddings([text])
         if embeddings.success and embeddings.embeddings and len(embeddings.embeddings) == 1:
             emb = embeddings.embeddings[0]
             if len(emb) != expected_dim:
