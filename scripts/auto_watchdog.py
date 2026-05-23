@@ -99,9 +99,10 @@ def _health_check():
         if r.status_code == 200:
             logger.info("✅ 伺服器健康檢查通過")
             return True
+        return True
     except Exception as e:
-        logger.warning(f"伺服器健康檢查: {e} (非致命，繼續)")
-    return True
+        logger.warning(f"伺服器健康檢查: {e}")
+    return False
 
 def _register_failure(error_msg: str):
     global RECENT_FAILURES

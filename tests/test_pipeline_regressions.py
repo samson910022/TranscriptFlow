@@ -232,7 +232,11 @@ def test_batch_embedding_partial_response_fails_closed(monkeypatch):
         def json(self):
             return {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
 
-    monkeypatch.setattr(batch_embedding._session, "post", lambda *args, **kwargs: FakeResponse())
+    class FakeSession:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(batch_embedding, '_get_session', lambda: FakeSession())
     client = batch_embedding.BatchEmbeddingClient(
         api_base="https://example.test",
         api_key="test-key",

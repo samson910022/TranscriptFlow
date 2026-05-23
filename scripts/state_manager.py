@@ -214,13 +214,6 @@ def acquire_phase_slot(file_id, phase):
     _atomic_update_phase_slots(path, _acquire)
     return _acquired[0]
 
-def release_phase_slot(phase):
-    path = _get_phase_slots_file()
-    def _release(slots):
-        phase_data = slots.get(phase, {"slots": [], "queue": []})
-        return slots
-    _atomic_update_phase_slots(path, _release)
-
 def release_file_phase_slot(file_id, phase):
     path = _get_phase_slots_file()
     def _release(slots):

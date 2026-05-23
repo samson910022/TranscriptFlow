@@ -15,7 +15,7 @@ def test_example_config_loads_without_private_defaults(monkeypatch):
     config_loader._config = None
     cfg = config_loader.get_config()
 
-    assert cfg["api"]["api_key"] == ""
+    assert cfg["api"].get("api_key", "") == ""
     assert "turn_key-solution" not in str(cfg)
     assert "/Users/" not in str(cfg)
 
