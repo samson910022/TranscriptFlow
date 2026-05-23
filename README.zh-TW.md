@@ -39,6 +39,16 @@ TranscriptFlow 旨在展示生產級的 AI 管線設計：
 - **並發安全**：共用 `BatchEmbeddingClient` 單例消除針對同一嵌入端點的重複電路斷路器。`save_status()` 鎖定行為統一與 `_locked_read_write()` 一致。
 - **程式碼品質**：重複的 `extract_participants()` 合併；手動驗證檢查移除，改由 Pydantic `ConfigSchema` 處理；Smart Merge 診斷工具改為呼叫正式程式碼；移除死亡程式碼。
 
+## 近期強化 (v1.9)
+
+2026 年 5 月完成第二波全面審查（24 項發現）：
+
+- **安全性**：所有測試設定檔中的硬編碼 API key 移除。子程序環境變數限縮為白名單。`_health_check()` 現在正確地在失敗時回傳 `False`。
+- **匯入安全**：`llm_client.py` 與 `summarize_pipeline.py` 優雅處理設定檔缺失的情況（與 v1.8 模式一致）。
+- **正確性**：移除無效的 `release_phase_slot()`。修正 `batch_audit`（dim_scores 聚合、過時 diag 變數）。損壞 JSON 修復改為跳過+警告。單一嵌入視窗失敗改為軟失敗。
+- **死亡程式碼**：移除完全未使用的 `ResilientEmbeddingClient`（使用 `urllib` 而非 `requests`）、`_escape_sql_literal()` 與 `get_resilient_client()` 工廠函數。
+- **測試**：兩個失敗測試已修復。新增 `conftest.py`、`pytest.ini` 與 `.github/workflows/test.yml`（CI/CD）。
+
 ## 為什麼存在
 
 多數字幕工具止於「摘要這個檔案」。TranscriptFlow 將字幕視為資料管線問題，特別是當來源存檔龐大、雜亂、難以透過標題或 metadata 搜尋時：

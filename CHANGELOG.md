@@ -1,6 +1,45 @@
 # Changelog
 
-## v1.8 (2026-05-23): Production hardening — security, concurrency, singleton, dead code removal
+## v1.9 (2026-05-23): Comprehensive audit fixes — security, correctness, CI/CD
+
+### 🔒 Security
+
+- **Removed hardcoded API keys from test configs** — `config_2.json` ~ `config_6.json` no longer contain `api_key` fields (plaintext `"c66951"` removed)
+- **Graceful module-level initialization** — `llm_client.py` and `summarize_pipeline.py` use try/except on `get_api_config()`, no longer crash on import when config is missing
+- **Subprocess env minimized** — `auto_watchdog.py` subprocesses only receive `PATH`, `HOME`, and `SRT_*` env vars instead of a full `os.environ.copy()`
+- **DNS resolution cached** — `sanitize_api_url()` stores resolved IPs in `_dns_cache` to reduce redundant lookups
+- **`_health_check()` fixed** — now correctly returns `False` on non-200 status codes and exceptions (previously always `True`)
+- **`release_phase_slot()` removed** — the function was a no-op (returned unmodified `slots` dict); all callers use `release_file_phase_slot()` instead
+- **SensitiveDataFilter logger init** — `config_loader.py`'s `logger` now defined at module top instead of after function definitions
+
+### 🐛 Bug Fixes
+
+- **`_health_check()` non-200 handling** — non-200 HTTP responses (e.g., 503, 500) now return `False` instead of `True`
+- **`batch_audit.py` `dim_scores` overwritten** — changed from `=` (overwrite) to `.extend()` so scores from all batch files are preserved
+- **`batch_audit.py` stale `diag` variable** — replaced with `items_with_diagnostics` counter that tracks state across the loop
+- **Corrupt JSON repair removed** — `summarize_pipeline.py` no longer silently appends `]` to truncated checkpoint files; warns and skips instead
+- **Soft-fail embedding** — `semantic_chunk.py` logs a warning for failed embedding windows instead of raising `RuntimeError` (only raises if zero chunks total)
+- **`get_worker_model()` uses `raise ValueError`** — instead of `sys.exit(1)`, so it doesn't terminate the interpreter
+- **`requirements.txt` updated** — added `python-dotenv` and `pydantic` with version pins for all dependencies
+
+### ♻️ Refactoring
+
+- **`ResilientEmbeddingClient` removed** — unused class using `urllib` (inconsistent with the rest of the codebase's `requests.Session()` pattern); removed along with `get_resilient_client` factory and all imports
+- **`_escape_sql_literal()` removed** — dead code in `finalize.py`, never called
+- **Double locking simplified** — `write_chunk_result()` in `summarize_pipeline.py` uses a single lock on the sidecar file; removed unnecessary inner `temp_file` lock
+- **`CircuitBreakerOpenError` includes cause** — now accepts optional `cause` parameter
+
+### 🧪 Testing & CI
+
+- **2 failing tests fixed** — `test_example_config_loads_without_private_defaults` uses `.get("api_key", "")` for resilient config access; `test_batch_embedding_partial_response_fails_closed` mocks `_get_session()` instead of `threading.local()` 
+- **`conftest.py` created** — adds `scripts/` to `sys.path` for all tests
+- **`pytest.ini` created** — configures test discovery paths and patterns
+- **CI/CD pipeline added** — `.github/workflows/test.yml`: runs on push/PR to `main`, Python 3.12, `compileall` + `pytest`
+- **`.gitignore` extended** — added `*.egg-info/`, `dist/`, `build/`, `.coverage`, `coverage/`, `htmlcov/`, `*_AUDIT_*.md`
+
+### 📝 Documentation
+
+- **`README.zh-TW.md`** — Traditional Chinese translation of README added
 
 ### 🔒 Security
 

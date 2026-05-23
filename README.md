@@ -39,6 +39,16 @@ A comprehensive code review (25 findings: 7 Critical, 12 Important, 6 Suggestion
 - **Concurrency**: Shared `BatchEmbeddingClient` singleton eliminates duplicate circuit breakers for the same embedding endpoint. `save_status()` locking standardized with `_locked_read_write()`.
 - **Code quality**: Duplicate `extract_participants()` consolidated; manual validation checks removed in favor of Pydantic `ConfigSchema`; Smart Merge diagnostics refactored to call production code; dead code removed.
 
+### Recent Hardening (v1.9)
+
+A second comprehensive audit (24 findings) was resolved in May 2026:
+
+- **Security**: Hardcoded API keys removed from all test config files. Subprocess env minimized to allowlist-only. `_health_check()` now correctly returns `False` on failure.
+- **Import safety**: `llm_client.py` and `summarize_pipeline.py` gracefully handle missing config at import time (matching the v1.8 pattern).
+- **Correctness**: `release_phase_slot()` removed (was no-op). `batch_audit` fixed (dim_scores aggregation, stale diag variable). Corrupt JSON repair replaced with skip+warning. Single embedding window failures are soft-fail.
+- **Dead code**: `ResilientEmbeddingClient` (entirely unused, used `urllib` instead of `requests`), `_escape_sql_literal()`, and `get_resilient_client()` factory removed.
+- **Testing**: Both failing tests fixed. `conftest.py`, `pytest.ini`, and `.github/workflows/test.yml` (CI/CD) added.
+
 ## Why It Exists
 
 Most transcript tools stop at "summarize this file." TranscriptFlow treats transcripts as a data pipeline problem, especially when the source archive is large, messy, and not easily searchable by title or metadata:
