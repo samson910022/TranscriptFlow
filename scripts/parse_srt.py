@@ -6,6 +6,8 @@ from logger_config import get_logger
 
 logger = get_logger('parse_srt')
 
+MAX_SRT_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+
 @dataclass
 class SubtitleEntry:
     start_time: str   # format HH:MM:SS,mmm
@@ -15,6 +17,9 @@ class SubtitleEntry:
 def parse_srt(path: str) -> List[SubtitleEntry]:
     if not os.path.exists(path):
         raise FileNotFoundError(f"SRT file not found: {path}")
+    file_size = os.path.getsize(path)
+    if file_size > MAX_SRT_FILE_SIZE:
+        raise ValueError(f"SRT file too large: {file_size} bytes (max {MAX_SRT_FILE_SIZE})")
     try:
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()

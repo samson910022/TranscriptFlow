@@ -111,7 +111,8 @@ class CheckpointManager:
                 if not content:
                     continue
                 if content.startswith('[') and not content.endswith(']'):
-                    content += ']'
+                    logger.warning(f"Corrupt checkpoint {checkpoint_path}: missing closing bracket, skipping")
+                    continue
                 checkpoint_results = json.loads(content)
                 if isinstance(checkpoint_results, list):
                     loaded_results.extend(checkpoint_results)

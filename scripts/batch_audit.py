@@ -211,6 +211,7 @@ def audit_errors(items):
     total_chunks = 0
     failed_chunks = 0
     chunks_missing_error_detail = 0
+    items_with_diagnostics = 0
 
     for item in items:
         fid = item.get('file_id', '?')
@@ -243,6 +244,7 @@ def audit_errors(items):
 
         diag = item.get('diagnostics') or {}
         if diag and diag.get('summary'):
+            items_with_diagnostics += 1
             models_diag = diag.get('models', {})
             actual_models = defaultdict(lambda: {"success": 0, "fail": 0})
             for c in chunks:
@@ -260,7 +262,7 @@ def audit_errors(items):
 
     error_capture_rate = ((failed_chunks - chunks_missing_error_detail) / failed_chunks * 100) if failed_chunks else 100
     score = error_capture_rate
-    if not diag and items:
+    if items and items_with_diagnostics == 0:
         score -= 10
     return issues, max(score, 0)
 
@@ -644,14 +646,14 @@ def build_report(batch_files, master_file, verbose):
 
         file_model_stats_all.update(file_ms)
 
-        dim_scores = [
+        dim_scores.extend([
             {"letter": "A", "name": "Schema & Structure", "score": score_s, "issue_count": len(iss_s)},
             {"letter": "B", "name": "Timeliness", "score": score_b, "issue_count": len(iss_b)},
             {"letter": "C", "name": "Error Visibility", "score": score_c, "issue_count": len(iss_c)},
             {"letter": "D", "name": "Data Integrity", "score": score_d, "issue_count": len(iss_d)},
             {"letter": "E", "name": "Model Performance", "score": score_e, "issue_count": len(iss_e)},
             {"letter": "F", "name": "Cross-File Consistency", "score": score_f, "issue_count": len(iss_f)},
-        ]
+        ])
 
     # Aggregate
     for item in all_items:

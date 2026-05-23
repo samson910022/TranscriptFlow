@@ -23,6 +23,11 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 CONFIG_PATH = Path(os.getenv('TRANSCRIPTFLOW_CONFIG', PROJECT_ROOT / 'config.json'))
 EXAMPLE_CONFIG_PATH = SCRIPT_DIR / 'config.example.json'
 
+import logging
+logger = logging.getLogger(__name__)
+
+_dns_cache = {}
+
 _config = None
 
 
@@ -236,7 +241,9 @@ def sanitize_api_url(url: str) -> tuple[bool, str]:
             if host_part in ('localhost', '127.0.0.1', '::1'):
                 return True, f"URL 合法 (localhost: {host_part})"
             try:
-                ip = socket.gethostbyname(host_part)
+                if host_part not in _dns_cache:
+                    _dns_cache[host_part] = socket.gethostbyname(host_part)
+                ip = _dns_cache[host_part]
                 addr = ipaddress.ip_address(ip)
                 if addr.is_private or addr in ipaddress.ip_network('100.64.0.0/10'):
                     return True, f"URL 合法 (內部網路 IP: {ip})"
@@ -247,10 +254,6 @@ def sanitize_api_url(url: str) -> tuple[bool, str]:
             return False, f"URL 解析失敗: {e}"
 
     return False, f"不支持的協議: {url.split(':')[0]}"
-
-# 增加一個日誌 helper，避免循環引用
-import logging
-logger = logging.getLogger(__name__)
 
 
 def get_api_config() -> dict:
