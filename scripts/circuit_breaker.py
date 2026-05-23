@@ -22,6 +22,10 @@ logger = logging.getLogger('circuit_breaker')
 
 class CircuitBreakerOpenError(Exception):
     """Circuit breaker 斷開時拋出的例外"""
+    def __init__(self, message="Circuit breaker is OPEN", cause=None):
+        super().__init__(message)
+        if cause is not None:
+            self.__cause__ = cause
 
 
 class CircuitState(Enum):
@@ -338,131 +342,6 @@ class AdaptiveThrottler:
             self.current_rate = self.config.initial_rate
             self.last_request_time = 0.0
             logger.info("🔄 Adaptive Throttler 已重置")
-
-
-class ResilientEmbeddingClient:
-    """
-    整合 Circuit Breaker 和 Adaptive Throttling 的 Embedding 客戶端
-    """
-    
-    def __init__(
-        self,
-        api_base: str,
-        api_key: str,
-        model: str,
-        timeout: int = 60,
-        cb_config: Optional[CircuitBreakerConfig] = None,
-        throttle_config: Optional[ThrottleConfig] = None
-    ):
-        self.api_base = api_base
-        self.api_key = api_key
-        self.model = model
-        self.timeout = timeout
-        
-        self.circuit_breaker = CircuitBreaker(cb_config)
-        self.throttler = AdaptiveThrottler(throttle_config)
-        
-        self.batch_cache: List[dict] = []
-        
-        logger.info("ResilientEmbeddingClient 已初始化", {
-            "api_base": api_base,
-            "model": model,
-            "timeout": timeout
-        })
-    
-    def call_embedding(self, texts: List[str]) -> dict:
-        """
-        調用 Embedding API (帶韌性機制)
-        
-        Args:
-            texts: 要嵌入的文字列表
-            
-        Returns:
-            API 回應字典
-        """
-        # 等待限流器許可
-        wait_time = self.throttler.acquire()
-        if wait_time > 0:
-            time.sleep(wait_time)
-        
-        # 使用 Circuit Breaker 保護
-        @self.circuit_breaker.call
-        def _make_request():
-            import urllib.request
-            import json
-            
-            url = f"{self.api_base.rstrip('/')}/v1/embeddings"
-            payload = json.dumps({
-                "model": self.model,
-                "input": texts
-            }).encode('utf-8')
-            headers = {
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {self.api_key}'
-            }
-            
-            req = urllib.request.Request(url, data=payload, headers=headers)
-            start_time = time.time()
-            
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                latency_ms = (time.time() - start_time) * 1000
-                result = json.load(resp)
-                
-                # 記錄成功並調整速率
-                self.throttler.record_success(latency_ms)
-                
-                return result
-        
-        try:
-            return _make_request()
-        except Exception as e:
-            self.throttler.record_failure()
-            raise
-    
-    def get_status(self) -> dict:
-        """獲取整體狀態"""
-        return {
-            "circuit_breaker": self.circuit_breaker.get_status(),
-            "throttler": self.throttler.get_status()
-        }
-    
-    def reset(self):
-        """重置所有狀態"""
-        self.circuit_breaker.reset()
-        self.throttler.reset()
-
-
-# 單例模式
-_client: Optional[ResilientEmbeddingClient] = None
-
-def get_resilient_client(
-    api_base: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model: Optional[str] = None,
-    timeout: int = 60
-) -> ResilientEmbeddingClient:
-    """獲取或創建 ResilientEmbeddingClient 單例"""
-    global _client
-    
-    if _client is None or \
-       (api_base and _client.api_base != api_base) or \
-       (model and _client.model != model):
-        
-        from config_loader import get_env_or_config, get_api_config
-        
-        _api_cfg = get_api_config()
-        api_base = api_base or _api_cfg['embedding_url']
-        api_key = api_key or _api_cfg['api_key']
-        model = model or get_env_or_config('EMBEDDING_MODEL', 'embedding.model', 'text-embedding-3-large')
-        
-        _client = ResilientEmbeddingClient(
-            api_base=api_base,
-            api_key=api_key,
-            model=model,
-            timeout=timeout
-        )
-    
-    return _client
 
 
 if __name__ == "__main__":
