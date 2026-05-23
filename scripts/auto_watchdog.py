@@ -99,7 +99,8 @@ def _health_check():
         if r.status_code == 200:
             logger.info("✅ 伺服器健康檢查通過")
             return True
-        return True
+        logger.warning(f"健康檢查返回非預期狀態碼: {r.status_code}")
+        return False
     except Exception as e:
         logger.warning(f"伺服器健康檢查: {e}")
     return False
