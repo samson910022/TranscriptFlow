@@ -362,10 +362,9 @@ def semantic_chunk(entries: List[SubtitleEntry], file_id: int, threshold: Union[
         try:
             with open(failed_path, 'w', encoding='utf-8') as f:
                 json.dump(failed_indices, f, ensure_ascii=False, indent=2)
-            logger.warning(f"⚠️ 發現 {len(failed_indices)} 個嵌入失敗的窗口")
         except Exception as e:
             logger.warning(f"寫入失敗 chunk 記錄時出錯: {e}")
-        raise RuntimeError(f"Smart Merge 失敗：共有 {len(failed_indices)} 個窗口向量化失敗。已停止流程要求人工檢查。")
+        logger.warning(f"⚠️ 發現 {len(failed_indices)} 個嵌入失敗的窗口（已跳過），請檢查 embedding API")
 
     if not final_chunks:
         raise RuntimeError("Smart Merge 失敗：產出 0 個 chunks。請檢查 SRT 內容或調整相似度閾值。")

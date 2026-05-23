@@ -406,8 +406,7 @@ def get_worker_model(file_id):
             model = models[idx]
             print(model)
             return model
-    print(f"[Error] File ID {file_id} not found in {STATUS_FILE}.")
-    sys.exit(1)
+    raise ValueError(f"File ID {file_id} not found in {STATUS_FILE}.")
 
 def check_watchdog():
     watchdog_timeout_sec = get_env_or_config('WATCHDOG_MAX_WORKING_TIME', 'watchdog.max_working_time_sec', 600)
@@ -418,7 +417,7 @@ def check_watchdog():
             if item["status"] not in ["undone", "done", "failed_permanent", "queueing_1", "queueing_2", "queueing_3"]:
                 last_updated = datetime.fromisoformat(item["last_updated"])
                 if (now - last_updated).total_seconds() >= watchdog_timeout_sec:
-                    print(f"[Watchdog] File {item['file_id']} stuck in {item['status']} for >{watchdog_timeout_sec}s. Resetting to undone.")
+                    logger.info(f"[Watchdog] File {item['file_id']} stuck in {item['status']} for >{watchdog_timeout_sec}s. Resetting to undone.")
                     item["error_log"].append({
                         "time": now.isoformat(), "from_status": item["status"],
                         "error": f"Watchdog timeout (>{watchdog_timeout_sec}s)", "used_model": "watchdog"

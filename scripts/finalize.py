@@ -66,10 +66,6 @@ def deduplicate_records(records: List[Dict]) -> List[Dict]:
     return deduped
 
 
-def _escape_sql_literal(value: str) -> str:
-    return str(value).replace("'", "''")
-
-
 def _validate_records(records: List[Dict]) -> Tuple[bool, str]:
     required = {
         "chunk_id", "file_id", "file_name", "start_time", "end_time", "summary", "text_content",

@@ -395,7 +395,7 @@ def run_batch_processor(batch_file):
             logger.info(f"🚀 [Auto] 啟動 {next_status}: 檔案 {file_id}...")
             cmd = ['bash', os.path.join(os.path.dirname(__file__), 'run_wrapper.sh'),
                    '--id', str(file_id), '--batch', batch_file, '--phase', next_status]
-            env = os.environ.copy()
+            env = {k: os.environ[k] for k in ('PATH', 'HOME', 'SRT_PROJECT_ROOT', 'SRT_OUTPUT_DIR', 'SRT_DB_PATH', 'SRT_MASTER_FILE', 'SRT_DATA_DIR', 'TRANSCRIPTFLOW_CONFIG') if k in os.environ}
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
             active_processes.append({"proc": proc, "file_id": file_id, "phase": phase})
             launched += 1
