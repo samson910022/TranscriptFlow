@@ -1,6 +1,46 @@
 # Changelog
 
-## v1.7 (2026-05-19): Multi-Group Consensus, Parallel Groups & Timing Stats
+## v1.8 (2026-05-23): Production hardening — security, concurrency, singleton, dead code removal
+
+### 🔒 Security
+
+- **`sanitize_api_url()` rewritten** — DNS resolution before IP check; uses `ipaddress.is_private` for full RFC 1918 + CGNAT (`100.64.0.0/10`) coverage; strips IPv6 brackets before hostname extraction; fixes DNS-spoofing bypass where hostnames like `10-evil.com` were treated as internal HTTP
+- **Module-level side effects removed** — `finalize.py` wraps config reads in `_ensure_config()` called from `write_to_db()`; `summarize.py` uses `_get_lazy_config()` + `_init_lazy_globals()` guarded by boolean flag; imports no longer crash when env vars are unset
+- **SensitiveDataFilter caches API key once** — `_update_patterns()` replaced by `_init_patterns()`, called only in `__init__`; per-log-record config file reads eliminated
+
+### 🐛 Bug Fixes (Critical)
+
+- **Circuit breaker fallback raises instead of returning None** — `_invoke_fallback()` now raises `CircuitBreakerOpenError`; `batch_embedding.py` catches it and returns `BatchResult(success=False, error=...)` instead of silently passing `None` with `success=True`
+- **Progress resume removed from semantic_chunk()** — `smart_merge_3_0()` now receives full entries; truncated entry lists previously shifted similarity percentile rankings and produced different breakpoints on resume
+- **`_convert_value` warns on JSON parse failure** — list-type env vars that fail `json.loads()` now log a warning with the raw string, instead of silently falling back to defaults
+- **`_reset_phase_slots()` format fixed** — previously wrote `{"phase1_chunking": 0, ...}` but the phase-slot system expects `{"phase1_chunking": {"slots": [], "queue": []}, ...}`; now matches the `acquire_phase_slot()`/`release_file_phase_slot()` contract
+
+### 🔧 Concurrency
+
+- **Shared BatchEmbeddingClient singleton** — `semantic_chunk.py` and `summarize.py` previously each created independent `BatchEmbeddingClient` instances with separate `CircuitBreaker` objects for the same embedding endpoint; now both use `get_embedding_client()` from `llm_client.py` with double-checked locking
+- **`save_status()` no longer removes sidecar lock** — lock file now persists on disk, matching `_locked_read_write()` behavior and preventing concurrent-write races
+- **`init_batch()` writes through `_locked_read_write()`** — no longer uses `save_status()`, eliminating the second write path with different locking semantics
+- **`load_status()` gets safety docstring** — documents that `os.replace()` atomicity on POSIX filesystems prevents torn reads even without the sidecar lock
+
+### ♻️ Refactoring
+
+- **`extract_participants()` deduplicated** — identical ~40-line function moved from both `summarize.py` and `chunk_test_runner.py` into `llm_client.py`; uses connection-pooled `_get_session()` instead of raw `requests.post()`
+- **`validate_config()` simplified** — all manual range checks (smart_merge_window_size, max_chunk_duration_sec, min/max_chunks, expected_dim) removed; Pydantic `ConfigSchema` now handles everything; `max_chunk_duration_sec` added to `ChunkingSchema`
+- **`smart_merge_diagnostics.py` refactored** — no longer duplicates Smart Merge 3.0 algorithm; calls production `smart_merge_3_0()` with `embed_fn=mock_generate_embedding`
+
+### 🧹 Dead Code Removal
+
+- `_time_to_seconds()` removed from `parse_srt.py` (unused)
+- `validate_path()` removed from `config_loader.py` and its import removed from `finalize.py` (unused)
+- `_batch_embedding_client` module-level variable removed from `semantic_chunk.py` and `summarize.py` (replaced by `get_embedding_client()`)
+
+### 🏷️ Exit Codes
+
+- `batch_audit.py` exit codes changed from `1`/`2` to `10`/`20` to distinguish application-level audit results from Python runtime errors in CI/CD pipelines
+
+### 📝 Documentation
+
+- `AGENTS.md` added with repository overview, OpenCode integration rules, skill directory structure, and anti-rationalization guidance
 
 ### 🚀 New Features
 

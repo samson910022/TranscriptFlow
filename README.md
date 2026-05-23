@@ -29,6 +29,16 @@ TranscriptFlow is built to demonstrate production-oriented AI pipeline design ra
 - adaptive embedding batching with circuit-breaker protection
 - audit tooling for data integrity, stale jobs, and cross-file consistency
 
+## Recent Hardening (v1.8)
+
+A comprehensive code review (25 findings: 7 Critical, 12 Important, 6 Suggestions) was resolved in May 2026:
+
+- **Security**: `sanitize_api_url()` now resolves DNS before IP checks and uses `ipaddress.is_private` for full RFC 1918 + CGNAT coverage, closing a DNS-spoofing bypass. API key caching eliminated per-log-record config file reads.
+- **Module safety**: `finalize.py` and `summarize.py` use lazy initialization — importing them no longer crashes when environment variables are unset.
+- **Data integrity**: Circuit breaker fallback raises `CircuitBreakerOpenError` instead of silently returning `None` with `success=True`. Progress resume was removed from semantic chunking to prevent incorrect breakpoints on rerun.
+- **Concurrency**: Shared `BatchEmbeddingClient` singleton eliminates duplicate circuit breakers for the same embedding endpoint. `save_status()` locking standardized with `_locked_read_write()`.
+- **Code quality**: Duplicate `extract_participants()` consolidated; manual validation checks removed in favor of Pydantic `ConfigSchema`; Smart Merge diagnostics refactored to call production code; dead code removed.
+
 ## Why It Exists
 
 Most transcript tools stop at "summarize this file." TranscriptFlow treats transcripts as a data pipeline problem, especially when the source archive is large, messy, and not easily searchable by title or metadata:
