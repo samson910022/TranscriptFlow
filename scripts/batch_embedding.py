@@ -30,8 +30,7 @@ import requests
 sys.path.insert(0, os.path.dirname(__file__))
 from logger_config import get_logger
 from circuit_breaker import (
-    get_resilient_client, 
-    CircuitBreakerConfig, 
+    CircuitBreakerConfig,
     ThrottleConfig,
     CircuitBreaker,
     AdaptiveThrottler

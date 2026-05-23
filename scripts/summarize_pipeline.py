@@ -157,7 +157,6 @@ class CheckpointManager:
     def write_chunk_result(self, result: dict):
         chunk_id = result.get('chunk_id', result.get('id'))
         
-        # M2: Lock 改用 LOCK_NB + 指數退避重試
         lock_acquired = False
         for attempt in range(3):
             try:
@@ -166,20 +165,16 @@ class CheckpointManager:
                     lock_acquired = True
                     try:
                         with open(self.temp_file, 'a+', encoding='utf-8') as f:
-                            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            try:
-                                file_size = os.path.getsize(self.temp_file)
-                                if file_size == 0:
-                                    f.write('[')
-                                else:
-                                    f.seek(0, 2)
-                                    f.write(',')
-                                json.dump(result, f, ensure_ascii=False)
-                                f.flush()
-                                os.fsync(f.fileno())
-                                self.completed_chunks[chunk_id] = result
-                            finally:
-                                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                            file_size = os.path.getsize(self.temp_file)
+                            if file_size == 0:
+                                f.write('[')
+                            else:
+                                f.seek(0, 2)
+                                f.write(',')
+                            json.dump(result, f, ensure_ascii=False)
+                            f.flush()
+                            os.fsync(f.fileno())
+                            self.completed_chunks[chunk_id] = result
                     finally:
                         fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
                     break
