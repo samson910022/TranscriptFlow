@@ -15,12 +15,19 @@ from config_loader import get_api_config, get_env_or_config
 from logger_config import get_logger
 from batch_embedding import BatchEmbeddingClient
 
-_api_cfg = get_api_config()
-API_BASE_URL = _api_cfg['base_url']
-CHAT_ENDPOINT = _api_cfg['chat_completions_path']
-API_KEY = _api_cfg['api_key']
-MAX_RETRIES = get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3)
-TIMEOUT_SEC = get_env_or_config('TIMEOUT_SEC', 'summarization.timeout_sec', 120)
+# Graceful module-level initialization — import never crashes
+try:
+    _api_cfg = get_api_config()
+    API_BASE_URL = _api_cfg['base_url']
+    API_KEY = _api_cfg['api_key']
+    CHAT_ENDPOINT = _api_cfg['chat_completions_path']
+except Exception:
+    _api_cfg = None
+    API_BASE_URL = None
+    API_KEY = None
+    CHAT_ENDPOINT = None
+MAX_RETRIES = get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3) if API_KEY else 3
+TIMEOUT_SEC = get_env_or_config('TIMEOUT_SEC', 'summarization.timeout_sec', 120) if API_KEY else 120
 
 _session = threading.local()
 _logger = get_logger('llm_client')
@@ -73,6 +80,8 @@ def call_llm(prompt: str, model: str = None, system_prompt: str = None,
     Returns:
         解析後的 dict（response_json=True 時），否則回傳原始字串
     """
+    if API_KEY is None:
+        raise RuntimeError('API key 未設定 - 請設定 OPENAI_API_KEY 環境變數或 config.json api.api_key')
     if not model and not models:
         models = get_models()
     if not model and models:
@@ -122,6 +131,8 @@ def extract_participants(chunks: List[Dict]) -> List[str]:
     僅使用影片開頭的幾個 chunk 來提取參與者。
     因為節目來賓介紹通常集中在開場，這樣可以減少 token 消耗並降低幻覺。
     """
+    if API_KEY is None:
+        raise RuntimeError('API key 未設定 - 請設定 OPENAI_API_KEY 環境變數或 config.json api.api_key')
     PARTICIPANT_CHUNKS = get_env_or_config('PARTICIPANT_CHUNKS', 'summarization.participant_chunks', 3)
     eligible = chunks[:PARTICIPANT_CHUNKS]
     if not eligible:

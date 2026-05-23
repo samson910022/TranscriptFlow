@@ -25,22 +25,28 @@ from llm_client import call_llm as _call_llm
 
 logger = get_logger('summarize_pipeline')
 
-_api_cfg = get_api_config()
-API_BASE_URL = _api_cfg['base_url']
-CHAT_ENDPOINT = _api_cfg['chat_completions_path']
-API_KEY = _api_cfg['api_key']
+# Graceful module-level initialization — import never crashes
+try:
+    _api_cfg = get_api_config()
+    API_BASE_URL = _api_cfg['base_url']
+    CHAT_ENDPOINT = _api_cfg['chat_completions_path']
+    API_KEY = _api_cfg['api_key']
+except Exception:
+    _api_cfg = None
+    API_BASE_URL = None
+    CHAT_ENDPOINT = None
+    API_KEY = None
 
-if not API_KEY:
-    raise RuntimeError('API key 未設定 - 請在 config.json api.api_key 或環境變數 OPENAI_API_KEY 中設定')
-
-# 從 config_loader 讀取模型清單（統一來源）
-MODELS = get_env_or_config('SUMMARIZATION_MODELS', 'summarization.models', [
-    "gpt-4.1-mini"
-])
-
-MAX_RETRIES = get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3)
-CONCURRENCY = int(get_env_or_config('CONCURRENCY', 'summarization.concurrency', 5))
-TIMEOUT_SEC = int(get_env_or_config('TIMEOUT_SEC', 'summarization.timeout_sec', 120))
+if API_KEY:
+    MODELS = get_env_or_config('SUMMARIZATION_MODELS', 'summarization.models', ["gpt-4.1-mini"])
+    MAX_RETRIES = get_env_or_config('MAX_RETRIES', 'summarization.max_retries', 3)
+    CONCURRENCY = int(get_env_or_config('CONCURRENCY', 'summarization.concurrency', 5))
+    TIMEOUT_SEC = int(get_env_or_config('TIMEOUT_SEC', 'summarization.timeout_sec', 120))
+else:
+    MODELS = ["gpt-4.1-mini"]
+    MAX_RETRIES = 3
+    CONCURRENCY = 5
+    TIMEOUT_SEC = 120
 
 # 跨 worker 共享模型計數器（執行緒安全）
 _model_counter = 0
@@ -280,6 +286,8 @@ def call_llm(text: str, model: str) -> dict:
 
 
 def process_chunk(chunk: dict, stats: dict) -> dict:
+    if API_KEY is None:
+        raise RuntimeError('API key 未設定 - 請設定 OPENAI_API_KEY 環境變數或 config.json api.api_key')
     chunk_id = chunk.get("chunk_id", "?")
     errors = []
     start_time = time.time()
@@ -384,6 +392,8 @@ def _incremental_write_chunk(batch_file, file_id, ch):
 
 def main(input_file: str, output_file: str, batch_file: str = None):
     global _model_counter
+    if API_KEY is None:
+        raise RuntimeError('API key 未設定 - 請設定 OPENAI_API_KEY 環境變數或 config.json api.api_key')
     _model_counter = 0
 
     # [Hybrid] Step 1: 基礎設施檢查 (B1 方案)
