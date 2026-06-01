@@ -1,5 +1,7 @@
 # TranscriptFlow
 
+[![English](README.md)][![繁體中文](README.zh-TW.md)]
+
 Resilient AI data pipeline for turning raw transcripts into searchable, summarized, vectorized knowledge.
 
 TranscriptFlow converts YouTube/SRT subtitle files into semantic chunks, LLM-generated summaries and tags, batched embeddings, and LanceDB vector indexes. It is designed for long transcripts and batch jobs where observability, retries, and recoverability matter.
